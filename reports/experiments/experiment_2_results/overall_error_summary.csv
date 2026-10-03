@@ -1,0 +1,7 @@
+metric,value
+mean_absolute_error,59.03721314861732
+median_absolute_error,6.475624084472656
+90th_percentile,124.07232666015625
+95th_percentile,278.69759436035145
+99th_percentile,910.4051988281275
+maximum_absolute_error,4777.9290771484375
