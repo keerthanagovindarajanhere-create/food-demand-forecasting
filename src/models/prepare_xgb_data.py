@@ -18,8 +18,13 @@ FEATURE_COLS = [
     "rolling_mean_28",
     "day_of_week",
     "day_of_month",
+    "week_of_year",
     "month",
+    "quarter",
     "year",
+    "is_weekend",
+    "is_month_start",
+    "is_month_end",
     "onpromotion",
 ]
 

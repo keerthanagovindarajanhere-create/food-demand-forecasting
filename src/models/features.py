@@ -47,9 +47,23 @@ def create_features(df):
 
     df["day_of_week"] = df["date"].dt.dayofweek
     df["day_of_month"] = df["date"].dt.day
+    df["week_of_year"] = df["date"].dt.isocalendar().week.astype(int)
+
     df["month"] = df["date"].dt.month
+    df["quarter"] = df["date"].dt.quarter
     df["year"] = df["date"].dt.year
 
+    df["is_weekend"] = (
+        df["day_of_week"] >= 5
+    ).astype(int)
+
+    df["is_month_start"] = (
+        df["date"].dt.is_month_start
+    ).astype(int)
+
+    df["is_month_end"] = (
+        df["date"].dt.is_month_end
+    ).astype(int)
     # -----------------------------
     # Promotion feature
     # -----------------------------
@@ -82,8 +96,13 @@ if __name__ == "__main__":
         "rolling_mean_28",
         "day_of_week",
         "day_of_month",
+        "week_of_year",
         "month",
+        "quarter",
         "year",
+        "is_weekend",
+        "is_month_start",
+        "is_month_end",
         "onpromotion",
     ]
 
