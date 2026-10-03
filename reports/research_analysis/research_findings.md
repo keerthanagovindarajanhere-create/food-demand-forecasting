@@ -1,441 +1,398 @@
 # FOODFLOW — Research Analysis Findings
 
-## Status
+## 1. Research Status
 
-**Modeling status:** Frozen  
-**Purpose:** Consolidated evidence from the completed research-analysis experiments.
+**Modeling status:** Frozen
 
-This document is the source of truth for the final research figures, presentation, and subsequent paper writing.
+This document contains the final quantitative evidence from the FOODFLOW research analysis.
 
-No additional model training or model-selection experiments are included after this point unless explicitly stated as a separate future experiment.
+The analysis investigates whether food-demand forecasting errors are uniformly distributed or concentrated in specific demand regimes, product families, and time periods.
 
----
+A final controlled experiment evaluates whether explicitly increasing the training importance of high-demand observations changes forecasting performance.
 
-# 1. Research Question
-
-The central research question investigated in this analysis is:
-
-> How does demand magnitude affect forecasting error, and can explicitly increasing the importance of high-demand observations improve performance in the extreme-demand regime?
-
-The analysis focuses not only on aggregate forecasting accuracy but also on the distribution and concentration of forecasting errors.
-
-The investigation therefore examines:
-
-1. Overall baseline forecasting performance.
-2. Error behaviour across demand regimes.
-3. Concentration of extreme forecasting errors.
-4. Differences in error across product families.
-5. Temporal concentration of extreme errors.
-6. The effect of tail-weighted training relative to the reference XGBoost model.
+No additional model training is part of this frozen analysis.
 
 ---
 
-# 2. Baseline Forecasting Performance
+# 2. Research Question
 
-## Observation
+The central research question is:
 
-The reference XGBoost model performs substantially differently across demand regimes.
+> How does demand magnitude affect forecasting error, and can explicitly increasing the importance of high-demand observations alter forecasting performance in the difficult demand tail?
 
-## Quantitative Evidence
+The analysis examines:
 
-For the reference model:
+1. Forecasting error across demand magnitudes.
+2. Concentration of squared forecasting error.
+3. Error heterogeneity across product families.
+4. Temporal concentration of extreme errors.
+5. The effect of tail-weighted XGBoost relative to the reference model.
 
-| Demand regime | Observations | MAE | RMSE | Bias | Underprediction Rate |
+---
+
+# 3. Reference Forecasting Model
+
+The reference model is an XGBoost forecasting model evaluated on a held-out temporal validation set.
+
+The validation set contains:
+
+**49,896 observations.**
+
+The reference model's overall performance is:
+
+| Metric | Reference |
+|---|---:|
+| MAE | 57.5538 |
+| RMSE | 198.0338 |
+
+The regime analysis divides observations into normal- and high-demand regimes.
+
+| Regime | Observations | MAE | RMSE | Bias | Underprediction Rate |
 |---|---:|---:|---:|---:|---:|
-| Normal | 37,957 | 11.44 | 21.95 | 1.96 | 58.32% |
-| High | 11,939 | 204.18 | 402.95 | 33.00 | 55.42% |
+| Normal | 37,957 | 11.4352 | 21.9526 | 1.9633 | 55.42% |
+| High | 11,939 | 204.1761 | 402.9477 | 32.9980 | 55.42% |
 
-The high-demand regime therefore produces dramatically larger forecasting errors than the normal-demand regime.
-
-## Interpretation
-
-Aggregate forecasting metrics conceal substantial heterogeneity in forecasting difficulty.
-
-The error increase in the high-demand regime indicates that the forecasting problem is strongly affected by demand magnitude. High-demand observations contribute disproportionately to the total forecasting loss.
-
-This motivates analysing the forecasting problem through the lens of error concentration rather than relying only on overall MAE.
-
-## Limitation
-
-The regime analysis is observational. The results establish an empirical relationship between demand magnitude and forecasting error but do not, by themselves, establish causality.
+The high-demand regime therefore represents approximately 23.93% of the validation observations while exhibiting substantially larger forecasting error.
 
 ---
 
-# 3. Extreme-Error Concentration
+# 4. Figure 1 — Demand Magnitude → Forecasting Error
 
 ## Observation
 
-A relatively small subset of observations produces very large absolute forecasting errors.
+Forecasting error increases sharply as demand magnitude increases.
 
-The tail of the error distribution is therefore substantially more severe than the central portion of the distribution.
+The demand distribution was divided into five groups using the observed demand values.
 
-## Quantitative Evidence
-
-The previously measured absolute-error statistics include:
-
-- Median absolute error: substantially lower than the upper tail.
-- 95th-percentile absolute error: substantially larger than the median.
-- Maximum absolute errors: several thousand units.
-
-For the analysed product families:
-
-| Family | Observations | MAE | Median AE | P95 AE | Maximum AE |
-|---|---:|---:|---:|---:|---:|
-| BEVERAGES | 1,512 | 475.30 | 304.76 | 1,486.37 | 4,021.91 |
-| GROCERY I | 1,512 | 463.83 | 317.07 | 1,380.46 | 4,268.63 |
-
-## Interpretation
-
-The large separation between typical error and extreme error indicates a heavy-tailed forecasting-error distribution.
-
-This means that improving average performance alone may not adequately address the operational impact of the forecasting system.
-
-A small number of high-error observations can have a disproportionately large influence on squared-error-based objectives.
-
-## Limitation
-
-The reported extreme-error statistics are sensitive to the dataset and evaluation period. They should therefore be interpreted as evidence for this forecasting dataset rather than as a universal property of food-demand forecasting.
-
----
-
-# 4. Demand Magnitude and Forecasting Error
-
-## Observation
-
-Forecasting error increases sharply with demand magnitude.
-
-## Quantitative Evidence
-
-The demand-regime comparison shows:
-
-- Normal-demand MAE: **11.44**
-- High-demand MAE: **204.18**
-
-The corresponding RMSE values are:
-
-- Normal-demand RMSE: **21.95**
-- High-demand RMSE: **402.95**
-
-Thus, the high-demand regime has substantially larger absolute and squared-error penalties.
-
-## Interpretation
-
-The relationship between demand magnitude and error suggests that forecasting difficulty is not uniformly distributed across the target space.
-
-The problem can therefore be viewed as having a difficult high-demand tail rather than simply having uniformly noisy predictions.
-
-This provides the motivation for explicitly examining tail-sensitive learning strategies.
-
-## Limitation
-
-The regime boundary and definition of "high demand" depend on the experimental setup. Different thresholds may produce different quantitative results.
-
----
-
-# 5. Product-Family Error Differences
-
-## Observation
-
-Forecasting error is not uniform across product families.
-
-The available family-level analysis shows substantial differences in MAE and extreme-error behaviour.
-
-## Quantitative Evidence
-
-Two representative family-level results are:
-
-| Family | Observations | MAE | Median AE | P95 AE | Maximum AE |
-|---|---:|---:|---:|---:|---:|
-| BEVERAGES | 1,512 | 475.30 | 304.76 | 1,486.37 | 4,021.91 |
-| GROCERY I | 1,512 | 463.83 | 317.07 | 1,380.46 | 4,268.63 |
-
-The family-level analysis demonstrates that both typical error and extreme error vary across product categories.
-
-## Interpretation
-
-The forecasting challenge is therefore heterogeneous not only across demand magnitudes but also across product families.
-
-This suggests that some product categories may contain different demand dynamics, variability, or susceptibility to extreme demand events.
-
-The final family-level figure will provide a compact visual representation of this heterogeneity.
-
-## Limitation
-
-Family-level error differences alone cannot identify the underlying cause. Possible explanations include demand variability, product characteristics, event effects, data sparsity, or differences in temporal demand patterns.
-
----
-
-# 6. Temporal Concentration of Extreme Errors
-
-## Observation
-
-Extreme forecasting errors are not necessarily distributed uniformly over time.
-
-The analysis identified periods in which unusually large errors are concentrated.
-
-## Quantitative Evidence
-
-The extreme-error timeline analysis identifies observations with unusually high absolute forecasting error and examines their temporal distribution.
-
-The largest observed family-level errors include:
-
-- BEVERAGES: maximum absolute error ≈ **4,021.91**
-- GROCERY I: maximum absolute error ≈ **4,268.63**
-
-## Interpretation
-
-Temporal clustering of extreme errors suggests that forecasting difficulty may be associated with specific periods rather than being purely random observation-level noise.
-
-This is important because large forecasting failures may correspond to demand shocks, events, seasonal effects, or other temporal conditions that are not completely captured by the current feature representation.
-
-## Limitation
-
-The current analysis identifies temporal concentration but does not establish the specific external cause of each spike. Attribution to holidays, events, promotions, weather, or other external factors would require additional data.
-
----
-
-# 7. Tail-Weighted XGBoost Experiment
-
-## Observation
-
-A tail-weighted training strategy was evaluated against the reference XGBoost model to investigate whether increasing the importance of high-demand observations changes performance in the difficult demand tail.
-
-## Quantitative Evidence
-
-The reference model produced:
-
-| Regime | MAE | RMSE | Bias | Underprediction Rate |
+| Demand group | Observations | Actual mean | MAE | RMSE |
 |---|---:|---:|---:|---:|
-| Normal | 11.44 | 21.95 | 1.96 | 58.32% |
-| High | 204.18 | 402.95 | 33.00 | 55.42% |
+| (-0.001, 2.0] | 11,033 | 0.48 | 0.58 | 1.69 |
+| (2.0, 13.0] | 9,045 | 7.03 | 5.25 | 6.70 |
+| (13.0, 83.0] | 9,868 | 35.68 | 13.40 | 18.46 |
+| (83.0, 416.108] | 9,971 | 211.31 | 34.54 | 49.13 |
+| (416.108, 18340.0] | 9,979 | 2,095.29 | 234.62 | 439.66 |
 
-The tail-weighted experiment is evaluated against this reference using the same regime-level metrics and the final comparison figure.
+## Quantitative Evidence
 
-The purpose of the comparison is not simply to identify a model with a lower aggregate error, but to determine whether explicit tail emphasis changes the error profile in the high-demand regime.
+The lowest-demand group has:
+
+- MAE = 0.58
+- RMSE = 1.69
+
+The highest-demand group has:
+
+- MAE = 234.62
+- RMSE = 439.66
+
+Therefore, the highest-demand group has approximately 406× the MAE of the lowest-demand group.
 
 ## Interpretation
 
-The tail-weighting experiment tests a specific hypothesis:
+Forecasting difficulty is strongly dependent on demand magnitude.
 
-> If high-demand observations are systematically more difficult and contribute disproportionately to forecasting loss, increasing their training importance may alter performance in the high-demand regime.
+The error does not increase uniformly with demand. Instead, the highest-demand observations form a substantially more difficult portion of the forecasting problem.
 
-This constitutes an empirical investigation of tail-sensitive learning for food-demand forecasting.
+This supports evaluating forecasting systems across demand regimes rather than relying exclusively on an aggregate metric.
 
 ## Limitation
 
-Tail weighting does not establish that the underlying causes of extreme demand have been modelled. Improvements or changes in tail performance may depend on the weighting strategy and selected definition of the high-demand regime.
+The demand groups are dataset-specific and describe an empirical relationship rather than establishing causality.
 
 ---
 
-# 8. Research Finding: Error Is Highly Unevenly Distributed
+# 5. Figure 2 — Cumulative Squared-Error Contribution
 
-## Core Finding
+## Observation
 
-Forecasting error is highly heterogeneous.
+Squared forecasting error is extremely concentrated in a small fraction of validation observations.
 
-It varies across:
+## Quantitative Evidence
 
-- demand magnitude,
-- product family,
-- and time.
+There are 49,896 validation observations.
 
-The high-demand regime is particularly difficult, with substantially larger MAE and RMSE than the normal-demand regime.
+When observations are sorted from largest to smallest squared error:
 
-## Evidence
-
-High-demand observations:
-
-- MAE = **204.18**
-- RMSE = **402.95**
-
-Normal-demand observations:
-
-- MAE = **11.44**
-- RMSE = **21.95**
-
-The error distribution also contains extreme observations with absolute errors exceeding **4,000 units** in the analysed family-level results.
-
-## Research Significance
-
-This provides evidence that aggregate forecasting metrics alone do not fully describe the behaviour of the forecasting system.
-
-A forecasting model may appear reasonable under average-error metrics while still exhibiting substantial failures in specific demand regimes.
-
----
-
-# 9. Research Finding: The High-Demand Tail Is the Main Difficulty
-
-## Core Finding
-
-The largest forecasting errors are concentrated in the high-demand portion of the target distribution.
-
-## Evidence
-
-The high-demand regime has:
-
-- approximately **18%** of the analysed observations,
-- but an MAE of **204.18** compared with **11.44** in the normal regime,
-- and an RMSE of **402.95** compared with **21.95**.
+| Largest-error observations | Share of total squared error |
+|---:|---:|
+| Top 1% | 69.04% |
+| Top 2% | 81.89% |
+| Top 5% | 93.86% |
+| Top 10% | 98.01% |
+| Top 20% | 99.55% |
 
 ## Interpretation
 
-The disproportionate error magnitude indicates that forecasting difficulty increases sharply in the demand tail.
+The top 1% of observations contribute approximately 69% of the total squared forecasting error.
 
-This motivates evaluating forecasting systems using regime-specific and tail-sensitive metrics rather than relying exclusively on global averages.
+The top 5% contribute approximately 94%.
+
+This demonstrates that aggregate squared-error metrics are dominated by a relatively small subset of difficult observations.
+
+The result provides strong empirical motivation for analysing the forecasting tail separately from average performance.
 
 ## Limitation
 
-The proportion and magnitude of the high-demand regime are dataset-specific.
+This concentration is specific to the evaluated validation set and the squared-error metric. It should not be assumed to occur at the same magnitude in other datasets.
 
 ---
 
-# 10. Research Finding: Tail-Sensitive Evaluation Is Necessary
+# 6. Figure 3 — Family-Level MAE
 
-## Core Finding
+## Observation
 
-Because extreme errors have a disproportionate effect on squared-error metrics, evaluating only average error can hide important forecasting failures.
+Forecasting error varies substantially across product families.
 
-## Evidence
+## Quantitative Evidence
 
-The observed error distributions contain a substantial difference between median error, 95th-percentile error, and maximum error.
+The highest observed family-level MAE values include:
 
-For example:
+| Product family | Observations | MAE | RMSE |
+|---|---:|---:|---:|
+| BEVERAGES | 1,512 | 448.73 | 685.23 |
+| GROCERY I | 1,512 | 440.78 | 656.65 |
+| CLEANING | 1,512 | 243.96 | 489.69 |
+| PRODUCE | 1,512 | 183.40 | 291.95 |
+| DAIRY | 1,512 | 78.41 | 121.53 |
+| BREAD/BAKERY | 1,512 | 56.72 | 92.00 |
+| MEATS | 1,512 | 50.70 | 81.02 |
 
-- BEVERAGES median AE = **304.76**
-- BEVERAGES P95 AE = **1,486.37**
-- BEVERAGES maximum AE = **4,021.91**
-
-For GROCERY I:
-
-- median AE = **317.07**
-- P95 AE = **1,380.46**
-- maximum AE = **4,268.63**
+The complete family-level distribution is shown in Figure 3.
 
 ## Interpretation
 
-The wide spread between central and extreme error statistics demonstrates that forecasting performance should be evaluated beyond a single average metric.
+Forecasting difficulty is heterogeneous across product categories.
 
-This supports the use of:
+BEVERAGES and GROCERY I exhibit substantially larger MAE than many other product families.
 
-- MAE,
-- RMSE,
-- regime-specific MAE/RMSE,
-- percentile error statistics,
-- extreme-error concentration,
-- and tail-weighted comparisons.
+This indicates that demand magnitude alone does not fully describe forecasting difficulty; product-family structure also corresponds to substantial differences in observed error.
 
----
+## Limitation
 
-# 11. Final Evidence Set
+Family-level differences do not establish why some categories are harder to forecast.
 
-The final research analysis will contain exactly five figures.
-
-### Figure 1 — Demand Magnitude → MAE/RMSE
-
-Purpose:
-
-Show how forecasting error changes as demand magnitude increases.
-
-Expected takeaway:
-
-> Forecasting error increases sharply with demand magnitude.
+Potential explanations include demand variability, product characteristics, temporal patterns, event effects, or differences in the distribution of high-demand observations.
 
 ---
 
-### Figure 2 — Cumulative Squared-Error Contribution
+# 7. Figure 4 — Extreme-Error Timeline
 
-Purpose:
+## Observation
 
-Show how much of the total squared forecasting error is contributed by the largest-error observations.
+The identified extreme-error observations show substantial variation across dates.
 
-Expected takeaway:
+## Quantitative Evidence
 
-> A relatively small subset of extreme observations contributes disproportionately to total squared error.
+The largest identified daily absolute error occurs on:
 
----
+**2017-08-12: 154,953.86 units**
 
-### Figure 3 — Family-Level MAE
+Other large daily absolute errors include:
 
-Purpose:
+- 2017-08-13: 113,247.26
+- 2017-08-05: 90,316.45
+- 2017-07-28: 71,209.93
+- 2017-08-06: 62,312.74
+- 2017-08-03: 59,911.01
+- 2017-08-11: 53,018.72
 
-Show heterogeneity in forecasting error across product families.
+## Interpretation
 
-Expected takeaway:
+The identified extreme-error dates demonstrate that the largest forecasting failures can be concentrated around particular time periods.
 
-> Forecasting difficulty differs substantially across product categories.
+The magnitude of the largest daily errors is substantially greater than the typical observation-level errors.
 
----
+This motivates temporal analysis of forecasting failures rather than treating all validation observations as equally difficult.
 
-### Figure 4 — Extreme-Error Timeline
+## Limitation
 
-Purpose:
+The analysis identifies when extreme errors occurred but does not establish their external cause.
 
-Show when the largest forecasting failures occur.
-
-Expected takeaway:
-
-> Extreme errors exhibit temporal concentration rather than being uniformly distributed.
-
----
-
-### Figure 5 — Reference vs Tail-Weighted XGBoost
-
-Purpose:
-
-Compare the reference and tail-weighted models across the relevant demand regimes.
-
-Expected takeaway:
-
-> Tail weighting provides an empirical test of whether explicitly emphasizing high-demand observations changes performance in the difficult demand regime.
+No causal attribution is made to promotions, holidays, weather, events, or other external factors without additional evidence.
 
 ---
 
-# 12. Overall Research Contribution
+# 8. Figure 5 — Reference vs Tail-Weighted XGBoost
 
-The current evidence supports an empirical contribution centred on the following observation:
+## Hypothesis
 
-> Food-demand forecasting errors are strongly heterogeneous and concentrated in the high-demand tail, with extreme observations contributing disproportionately to forecasting loss.
+Because large forecasting errors are concentrated in high-demand observations, increasing the training importance of high-demand observations may alter high-demand forecasting performance.
 
-The analysis further investigates whether this structure can be addressed through explicit tail-weighted training.
+## Controlled Setup
 
-The contribution is therefore not presented as a claim of a universally superior forecasting algorithm.
+The tail-weighted experiment used:
 
-Instead, the study provides an empirical analysis of:
+- the same dataset,
+- the same temporal split,
+- the same features,
+- the same XGBoost hyperparameters,
+- the same random seed,
+- and the same model architecture.
 
-1. demand-dependent forecasting difficulty,
-2. extreme-error concentration,
-3. product-family heterogeneity,
-4. temporal concentration of failures,
-5. and the effect of tail-weighted learning.
+The only change was the training sample weighting.
+
+High-demand observations were defined using the training 80th percentile.
+
+Training high-demand threshold:
+
+**298 units**
+
+High-demand observations received a training weight of:
+
+**2.0**
+
+## Quantitative Evidence
+
+| Regime | Metric | Reference | Tail-weighted | Change |
+|---|---|---:|---:|---:|
+| Overall | MAE | 57.5538 | 56.9090 | -0.6448 |
+| Overall | RMSE | 198.0338 | 197.4767 | -0.5571 |
+| High | MAE | 204.1761 | 201.4481 | -2.7280 |
+| High | RMSE | 402.9477 | 401.5392 | -1.4085 |
+| High | Bias | 33.00 | 41.65 | +8.65 |
+| High | Underprediction rate | 55.42% | 56.26% | +0.85 pp |
+| Normal | MAE | 11.4352 | 11.4456 | +0.0104 |
+| Normal | RMSE | 21.9526 | 23.4246 | +1.4720 |
+
+Tail-weighted regime results:
+
+| Regime | Observations | Actual mean | MAE | RMSE | Bias | Underprediction Rate |
+|---|---:|---:|---:|---:|---:|---:|
+| Normal | 37,957 | 48.46 | 11.45 | 23.42 | -0.48 | 51.80% |
+| High | 11,939 | 1,808.97 | 201.45 | 401.54 | 41.65 | 56.26% |
+
+## Interpretation
+
+Tail weighting produced a modest reduction in overall and high-demand error.
+
+High-demand MAE decreased from 204.18 to 201.45, while high-demand RMSE decreased from 402.95 to 401.54.
+
+However, the improvement was not uniform.
+
+High-demand bias increased from 33.00 to 41.65, and the high-demand underprediction rate increased from 55.42% to 56.26%.
+
+Normal-regime RMSE also increased from 21.95 to 23.42.
+
+Therefore, the experiment demonstrates a trade-off rather than a uniformly superior forecasting model.
+
+## Limitation
+
+Only one tail-weighting configuration was evaluated in the frozen analysis.
+
+The experiment therefore demonstrates the empirical effect of this controlled weighting strategy rather than establishing that tail weighting is generally optimal.
 
 ---
 
-# 13. Current Limitations
+# 9. Consolidated Research Findings
 
-The following limitations must remain explicit in the final presentation and paper:
+## Finding 1 — Forecasting difficulty increases strongly with demand magnitude
+
+The highest demand group has MAE of 234.62 and RMSE of 439.66, compared with MAE of 0.58 and RMSE of 1.69 for the lowest demand group.
+
+This establishes strong demand-dependent heterogeneity in forecasting error.
+
+---
+
+## Finding 2 — Squared forecasting error is dominated by a small error tail
+
+The top 1% of validation observations contribute 69.04% of total squared error.
+
+The top 5% contribute 93.86%.
+
+This demonstrates that average forecasting performance does not adequately describe the distribution of the largest failures.
+
+---
+
+## Finding 3 — Forecasting difficulty differs across product families
+
+BEVERAGES and GROCERY I have MAE values of 448.73 and 440.78 respectively, substantially exceeding many other product families.
+
+This indicates substantial category-level heterogeneity.
+
+---
+
+## Finding 4 — Extreme errors vary substantially across time
+
+The largest identified daily absolute error is 154,953.86 units on 2017-08-12.
+
+The extreme-error timeline demonstrates that large forecasting failures can be concentrated in particular periods.
+
+---
+
+## Finding 5 — Tail weighting changes the error profile but involves trade-offs
+
+Tail-weighted XGBoost reduced:
+
+- overall MAE by 0.6448,
+- overall RMSE by 0.5571,
+- high-demand MAE by 2.7280,
+- high-demand RMSE by 1.4085.
+
+However, it also increased:
+
+- high-demand bias by 8.65,
+- high-demand underprediction rate by 0.85 percentage points,
+- normal-regime RMSE by 1.47.
+
+The result therefore supports a nuanced conclusion:
+
+> Tail weighting can modestly reduce error in the high-demand regime, but improvements are accompanied by changes in bias and normal-regime performance.
+
+---
+
+# 10. Research Contribution
+
+The empirical contribution of the analysis is the characterization of food-demand forecasting error as a heterogeneous and strongly tail-concentrated problem.
+
+The evidence demonstrates that:
+
+1. Forecasting error increases sharply with demand magnitude.
+2. A very small proportion of observations dominates squared forecasting loss.
+3. Error varies substantially across product families.
+4. Extreme forecasting failures exhibit substantial temporal variation.
+5. Explicit tail weighting changes high-demand performance, but introduces measurable trade-offs.
+
+The study therefore argues for evaluating food-demand forecasting systems using demand-regime and tail-sensitive analyses in addition to aggregate forecasting metrics.
+
+The contribution is empirical rather than a claim of a universally superior forecasting algorithm.
+
+---
+
+# 11. Limitations
 
 1. The analysis is based on a single forecasting dataset.
-2. The identified high-demand regime depends on the selected threshold.
-3. Extreme-error observations are not automatically attributable to specific real-world causes.
-4. External variables such as promotions, holidays, weather, and local events are not fully represented in the current analysis.
-5. Tail weighting changes the training objective but does not directly model the causes of demand spikes.
-6. The empirical findings should not be generalized beyond the evaluated data without additional datasets or experiments.
-7. No causal interpretation is claimed from the observed error patterns.
+2. Demand-group boundaries are dataset-specific.
+3. The high-demand regime definition uses the training 80th percentile.
+4. Extreme-error dates do not establish causal explanations.
+5. External factors such as promotions, weather, events, and local disruptions are not fully represented.
+6. Only one tail-weighting configuration is included in the frozen experiment.
+7. The results should not be generalized to other datasets without additional evaluation.
+8. No causal interpretation is claimed.
 
 ---
 
-# 14. Modeling Freeze
+# 12. Final Figures
 
-As of this analysis:
+The final research analysis contains exactly five figures:
 
-**Modeling is frozen.**
+1. `01_demand_magnitude_error.png`
+2. `02_cumulative_squared_error.png`
+3. `03_family_mae.png`
+4. `04_extreme_error_timeline.png`
+5. `05_reference_vs_tail_weighted.png`
 
-No additional model architectures, hyperparameter searches, feature-engineering experiments, or alternative weighting strategies should be introduced into the primary research analysis.
+These figures constitute the primary visual evidence for the research presentation.
 
-The remaining work is:
+---
 
-1. finalize the five figures,
-2. verify numerical consistency,
-3. document findings,
-4. construct the presentation,
-5. and use the frozen evidence as the basis for the research paper.
+# 13. Modeling Freeze
+
+Modeling is frozen at this stage.
+
+No additional model architectures, hyperparameter searches, feature-engineering experiments, or weighting strategies are required for the primary research analysis.
+
+Remaining work:
+
+1. Finalize and commit this research-analysis report.
+2. Commit the five final figures.
+3. Build the STRIDE presentation around the frozen evidence.
+4. Use the same evidence as the basis for the research paper.
