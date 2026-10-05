@@ -2,6 +2,9 @@ import time
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import os
+import json
+import joblib
 
 from sklearn.metrics import (
     mean_absolute_error,
@@ -156,6 +159,39 @@ model.fit(
     X_train,
     y_train,
     verbose=False
+)
+# =========================================================
+# SAVE FROZEN REFERENCE MODEL
+# =========================================================
+
+MODEL_DIR = "artifacts/model"
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+joblib.dump(
+    model,
+    os.path.join(MODEL_DIR, "xgb_reference.pkl")
+)
+
+with open(
+    os.path.join(MODEL_DIR, "feature_columns.json"),
+    "w"
+) as f:
+    json.dump(
+        list(X_train.columns),
+        f,
+        indent=2
+    )
+
+print(
+    f">>> Frozen reference model saved to "
+    f"{MODEL_DIR}/xgb_reference.pkl",
+    flush=True
+)
+
+print(
+    f">>> Feature columns saved to "
+    f"{MODEL_DIR}/feature_columns.json",
+    flush=True
 )
 
 train_time = time.time() - train_start
