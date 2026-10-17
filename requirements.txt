@@ -8,3 +8,6 @@ lightgbm
 matplotlib
 seaborn
 jupyter
+streamlit>=1.50
+plotly
+pytest
