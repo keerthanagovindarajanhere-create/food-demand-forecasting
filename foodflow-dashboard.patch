@@ -1,0 +1,2672 @@
+From eb93ae9c3d59b9232c1f6ad6f1910b4dabbb73d6 Mon Sep 17 00:00:00 2001
+From: Keerthu <gkeerthana.8115psgps2020@gmail.com>
+Date: Sat, 17 Oct 2026 08:17:52 +0000
+Subject: [PATCH] Complete FOODFLOW Streamlit dashboard: forecasting, analysis,
+ planner, tests, README
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Q5YY7oyoBR7qaqSPuSsRMv
+---
+ .streamlit/config.toml    |   9 ++
+ README.md                 | 283 ++++++++++++++++------------------
+ app.py                    | 254 ++++--------------------------
+ pages/1_Forecast.py       | 316 --------------------------------------
+ pages/analysis.py         | 227 +++++++++++++++++++++++++++
+ pages/forecast.py         | 157 +++++++++++++++++++
+ pages/overview.py         | 118 ++++++++++++++
+ pages/pages/1_Forecast.py | 316 --------------------------------------
+ pages/planner.py          | 157 +++++++++++++++++++
+ requirements.txt          |   5 +-
+ src/foodflow_core.py      | 309 +++++++++++++++++++++++++++++++++++++
+ src/ui.py                 | 159 +++++++++++++++++++
+ tests/test_app_smoke.py   |  18 +++
+ tests/test_foodflow.py    | 138 +++++++++++++++++
+ 14 files changed, 1457 insertions(+), 1009 deletions(-)
+ create mode 100644 .streamlit/config.toml
+ delete mode 100644 pages/1_Forecast.py
+ create mode 100644 pages/analysis.py
+ create mode 100644 pages/forecast.py
+ create mode 100644 pages/overview.py
+ delete mode 100644 pages/pages/1_Forecast.py
+ create mode 100644 pages/planner.py
+ create mode 100644 src/foodflow_core.py
+ create mode 100644 src/ui.py
+ create mode 100644 tests/test_app_smoke.py
+ create mode 100644 tests/test_foodflow.py
+
+diff --git a/.streamlit/config.toml b/.streamlit/config.toml
+new file mode 100644
+index 0000000..70ff80b
+--- /dev/null
++++ b/.streamlit/config.toml
+@@ -0,0 +1,9 @@
++[theme]
++base = "light"
++primaryColor = "#1f7a5c"
++backgroundColor = "#ffffff"
++secondaryBackgroundColor = "#f3f6f4"
++textColor = "#1d2b24"
++
++[server]
++headless = true
+diff --git a/README.md b/README.md
+index b134a68..914a064 100644
+--- a/README.md
++++ b/README.md
+@@ -1,215 +1,194 @@
+ # FOODFLOW
+ 
+-## Food Demand Forecasting & Smart Preparation Optimization
++## Food Demand Forecasting & Smart Preparation Planning
+ 
+-FOODFLOW is a food demand forecasting system designed to estimate
+-product demand for individual stores and product families.
+-
+-The project combines time-series feature engineering, machine learning,
+-error analysis and a targeted high-demand tail experiment.
++FOODFLOW forecasts daily demand for each store and product family, studies where the
++forecasting model fails, and turns a forecast into an illustrative preparation quantity.
++It ships as a four-page Streamlit dashboard built on a frozen XGBoost model.
+ 
+ ---
+ 
+ ## Problem
+ 
+-Food businesses need reliable demand estimates to prepare sufficient
+-inventory while avoiding unnecessary over-preparation.
+-
+-Demand varies across:
++Food retailers decide every day how much to stock or prepare. Too little means empty shelves
++and lost sales; too much means waste. Demand varies by store, product family, weekday, season,
++promotions and recent sales history, so fixed rules of thumb perform poorly.
+ 
+-- stores
+-- product families
+-- weekdays
+-- seasons
+-- promotions
+-- recent demand history
+-
+-The objective of FOODFLOW is to forecast demand using historical sales
+-patterns and operational information.
++FOODFLOW forecasts demand from historical sales patterns and operational information, and
++examines whether good *average* accuracy hides large failures in specific demand regimes.
+ 
+ ---
+ 
+ ## Dataset
+ 
+-The project uses the Ecuador store sales dataset from Kaggle.
+-
+-The training data contains:
++Kaggle **Store Sales – Time Series Forecasting** (Corporación Favorita, Ecuador).
+ 
+-- 54 stores
+-- 33 product families
+-- approximately 3 million observations
+-- daily sales observations
+-- promotion information
+-- historical demand patterns
++| Property | Value |
++|---|---:|
++| Training observations | 3,000,888 |
++| Stores × product families | 54 × 33 = 1,782 series |
++| Period | 2013-01-01 to 2017-08-15 |
++| Zero-sales observations | 31.30% |
++| Rows with any promotion | 20.37% |
+ 
+-The observed training period spans:
++`sales` is strongly right-skewed (median 11, 99th percentile 5,507). `onpromotion` is the
++*number* of items in the family on promotion. Full profile: `docs/DATASET_PROFILE.md`.
+ 
+-2013-01-01 to 2017-08-15
++The raw CSV is not committed (see `.gitignore`). The dashboard does **not** need it: it uses
++the saved validation results, which contain actual sales for every series from 2017-07-19 to
++2017-08-15. If `data/raw/train.csv` is present, the forecast page uses it as its history source
++instead.
+ 
+ ---
+ 
+ ## Methodology
+ 
+-The project follows a temporal forecasting setup.
+-
+-### Feature Engineering
+-
+-The model uses:
+-
+-- lag-1 demand
+-- lag-7 demand
+-- lag-14 demand
+-- lag-28 demand
+-- 7-day rolling mean
+-- 14-day rolling mean
+-- 28-day rolling mean
+-- day of week
+-- day of month
+-- week of year
+-- month
+-- quarter
+-- year
+-- weekend indicator
+-- month-start indicator
+-- month-end indicator
+-- promotion status
+-- store number
+-- product-family encoding
++- **Temporal split:** train 2013-01-01 → 2017-07-18; validate 2017-07-19 → 2017-08-15
++  (28 days, 49,896 observations).
++- **Features (51):** lags 1/7/14/28; 7/14/28-day rolling means (shifted, past-only); day of
++  week, day of month, week of year, month, quarter, year, weekend / month-start / month-end
++  flags; promotion count; store number; one-hot product family (`src/models/features.py`).
++- **Model:** XGBoost, 500 trees, learning rate 0.05, max depth 8, subsample 0.8, colsample 0.8,
++  min child weight 5; predictions clipped at 0 (`src/models/train_xgb.py`).
++- **Research analysis:** error by demand magnitude, cumulative squared-error concentration,
++  family / store / date breakdowns, and a controlled tail-weighted retraining experiment.
+ 
+ ---
+ 
+-## Baselines
++## Results
+ 
+-Three simple forecasting baselines were evaluated:
++All values below are recomputed by the app and by `tests/test_foodflow.py` from the saved
++artifacts in `reports/`.
+ 
+-| Model | MAE | RMSE |
+-|---|---:|---:|
+-| Naive | 114.01 | 390.21 |
+-| Seasonal Naive | 86.93 | 313.83 |
+-| 7-Day Moving Average | 96.30 | 326.18 |
++| Model | MAE | RMSE | RMSLE |
++|---|---:|---:|---:|
++| Naive (yesterday) | 114.01 | 390.21 | 0.547 |
++| Seasonal naive (same weekday last week) | 86.93 | 313.83 | 0.547 |
++| 7-day moving average | 96.30 | 326.18 | 0.450 |
++| **Reference XGBoost** | **57.55** | **198.03** | 0.765 |
+ 
+-These baselines establish the difficulty of the forecasting problem.
++XGBoost reduces MAE by 33.8% versus the seasonal naive baseline. It does not win on RMSLE,
++which heavily weights relative errors on low and zero-demand series; the model was optimised
++for absolute error.
+ 
+----
+-
+-## Reference XGBoost Model
++### Error concentration
+ 
+-The final reference model uses XGBoost with:
++Sorting validation observations by squared error:
+ 
+-- 500 estimators
+-- learning rate = 0.05
+-- maximum depth = 8
+-- subsample = 0.8
+-- column sampling = 0.8
+-- minimum child weight = 5
++| Worst observations | Share of total squared error |
++|---:|---:|
++| Top 1% (499 rows) | 69.04% |
++| Top 2% | 81.89% |
++| Top 5% | 93.86% |
++| Top 10% | 98.01% |
++| Top 20% | 99.55% |
+ 
+-The frozen reference model achieved:
++The top 1% is dominated by BEVERAGES, GROCERY I, CLEANING and PRODUCE. MAE rises from 0.58 in
++the lowest demand quintile to 234.62 in the highest.
+ 
+-- MAE = 57.5538
+-- RMSE = 198.0338
+-- RMSLE = 0.7651
++### Tail-weighted experiment
+ 
+-The model is stored in:
++Same data, split, features, hyperparameters and seed; only sample weights changed (weight 2.0
++for training rows above the 80th percentile, 298 units).
+ 
+-`artifacts/model/xgb_reference.pkl`
++| Metric | Reference | Tail-weighted | Change |
++|---|---:|---:|---:|
++| Overall MAE | 57.5538 | 56.9090 | −0.64 |
++| Overall RMSE | 198.0338 | 197.4767 | −0.56 |
++| High-demand MAE | 204.1761 | 201.4481 | −2.73 |
++| Normal-demand RMSE | 21.9526 | 23.4246 | +1.47 |
++| High-demand bias | +33.00 | +41.65 | +8.65 |
+ 
+-The feature schema is stored in:
++A small, consistent gain where the error is concentrated, with trade-offs in the normal regime
++and in over-prediction bias. The app uses the frozen reference model.
+ 
+-`artifacts/model/feature_columns.json`
++Details: `reports/research_analysis/research_findings.md`.
+ 
+ ---
+ 
+-## Error Analysis
+-
+-The research analysis showed that forecast error is highly concentrated.
+-
+-On the validation set:
+-
+-- 1% of observations account for approximately 69.04% of squared error
+-- 2% account for approximately 81.89%
+-- 5% account for approximately 93.86%
+-- 10% account for approximately 98.01%
+-- 20% account for approximately 99.55%
+-
+-This indicates that a relatively small number of observations dominate
+-the total squared forecasting error.
+-
+-The largest errors are concentrated in high-demand observations and
+-specific product-family/store combinations.
+-
+----
++## Dashboard
+ 
+-## Tail-Weighted Experiment
++| Page | What it shows |
++|---|---|
++| **Overview** | Problem, objective, verified KPI cards, baselines vs XGBoost, key finding, dataset stats |
++| **Demand Forecasting** | Store / family / date / promotion inputs → frozen-model forecast, recent demand chart, validation fit, feature-based explanation, promotion sensitivity |
++| **Demand & Error Analysis** | Demand trends, family comparisons, actual vs predicted with filters, error distribution, cumulative squared-error curve, demand-regime and tail-weighted comparison, feature importance |
++| **Smart Preparation Planner** | Safety-buffer quantity, shortage-vs-waste what-if table, cost-balanced (newsvendor) quantity with configurable costs |
+ 
+-A targeted experiment was conducted after identifying the high-demand
+-tail as an important failure regime.
++### How forecasts are produced
+ 
+-High-demand observations were defined using the 80th percentile of
+-training demand.
++The data ends on 2017-08-15, so the supported forecast dates are **2017-08-16 to 2017-08-31**.
+ 
+-The experiment assigned:
++- **16 Aug — direct next-day forecast.** Every lag and rolling feature comes from real sales,
++  exactly as in validation.
++- **17–31 Aug — recursive forecast.** Earlier predictions are fed back as lag values. These are
++  clearly labelled in the app and are less reliable.
+ 
+-- weight = 1.0 to normal-demand observations
+-- weight = 2.0 to high-demand observations
++Features are built with the same `create_features` function used in training, and the app
++checks that the last 28 days of history are complete before predicting.
+ 
+-Results:
++### Preparation planner formulas
+ 
+-| Metric | Reference | Tail-Weighted |
+-|---|---:|---:|
+-| Overall MAE | 57.5538 | 56.9090 |
+-| Overall RMSE | 198.0338 | 197.4767 |
+-| High-demand MAE | 204.1761 | 201.4481 |
++- Buffered quantity = forecast × (1 + buffer%).
++- Demand scenarios: `D_i = max(0, forecast + r_i)`, where `r_i` are the model's 28 validation
++  errors (actual − predicted) for that store-family.
++- Cost of preparing Q = `C_short × max(D − Q, 0) + C_waste × max(Q − D, 0)`, averaged over scenarios.
++- Cost-balanced quantity = quantile of `D_i` at the critical ratio `C_short / (C_short + C_waste)`.
+ 
+-The experiment produced a small improvement in overall error and a
+-larger improvement within the high-demand regime.
+-
+-This provides an empirical finding rather than claiming a universally
+-optimal forecasting method.
++All planner values are simulations based on user-entered costs. No real inventory, savings or
++waste reduction is measured.
+ 
+ ---
+ 
+-## Research Contribution
+-
+-The main contribution of FOODFLOW is an empirical investigation of
+-forecasting failure concentration in a large retail demand dataset.
++## Installation and running
+ 
+-The analysis demonstrates that:
++```bash
++git clone https://github.com/keerthanagovindarajanhere-create/food-demand-forecasting.git
++cd food-demand-forecasting
++python -m venv .venv
++# Windows: .venv\Scripts\activate     macOS/Linux: source .venv/bin/activate
++pip install -r requirements.txt
+ 
+-1. Strong overall forecasting performance does not imply uniform
+-   performance across demand regimes.
++python -m streamlit run app.py
++```
+ 
+-2. A small fraction of high-error observations can dominate total
+-   squared error.
++The app opens at http://localhost:8501.
+ 
+-3. High-demand observations represent an important forecasting
+-   failure regime.
++Run the tests:
+ 
+-4. A simple tail-weighting strategy can slightly improve forecasting
+-   performance in this regime.
++```bash
++python -m pytest tests -q
++```
+ 
+-The project therefore focuses on diagnosing and addressing a specific
+-forecasting failure mode rather than performing unrestricted feature
+-engineering or hyperparameter tuning.
++One test (`test_matches_saved_validation_predictions_when_raw_data_present`) is skipped unless
++`data/raw/train.csv` exists; with the raw data present it checks that the app's feature
++pipeline reproduces the saved validation predictions.
+ 
+ ---
+ 
+-## Streamlit Application
+-
+-FOODFLOW provides an interactive Streamlit interface.
++## Project structure
++
++```
++app.py                      Streamlit entry point and navigation
++pages/                      overview, forecast, analysis, planner
++src/foodflow_core.py        forecasting, metrics and planner logic (no Streamlit)
++src/ui.py                   cached loaders, styling, KPI cards
++src/models/                 features, data preparation, training, baselines
++scripts/                    profiling, validation, experiments, figure generation
++artifacts/model/            frozen XGBoost model and feature schema
++reports/                    baseline, error-analysis and tail-weighted results
++docs/                       dataset profile, evaluation and methodology notes
++tests/                      targeted tests and page smoke tests
++```
+ 
+-The user can provide:
+-
+-- store
+-- product family
+-- forecast date
+-- promotion status
+-
+-The application automatically constructs the required historical and
+-calendar features and sends them to the frozen XGBoost model.
+-
+-The application returns the predicted demand.
++---
+ 
+-### Run locally
++## Known limitations
+ 
+-```bash
+-python -m streamlit run app.py
++- Forecasts are only available for 2017-08-16 to 2017-08-31. Beyond 16 Aug they are recursive,
++  and the model was only validated on next-day forecasts.
++- The promotion value entered is applied to every day of a recursive forecast.
++- Holidays, oil prices, transactions and store metadata are not model features.
++- The ± band on the forecast is the series' validation MAE, not a calibrated prediction interval.
++- Planner scenarios use only 28 past errors per series, and the costs are user assumptions.
++- The error-concentration and tail-weighting results come from one 28-day validation window.
+diff --git a/app.py b/app.py
+index 2cdc8ee..9aaee2a 100644
+--- a/app.py
++++ b/app.py
+@@ -1,13 +1,17 @@
++"""
++FOODFLOW - Food Demand Forecasting & Smart Preparation Planning
++Entry point:  python -m streamlit run app.py
++"""
++
++import sys
+ from pathlib import Path
+-import json
+-import pickle
+ 
+ import streamlit as st
+ 
+-
+-# ============================================================
+-# CONFIG
+-# ============================================================
++ROOT = Path(__file__).resolve().parent
++for p in (ROOT / "src", ROOT / "src" / "models"):
++    if str(p) not in sys.path:
++        sys.path.insert(0, str(p))
+ 
+ st.set_page_config(
+     page_title="FOODFLOW",
+@@ -16,226 +20,28 @@ st.set_page_config(
+     initial_sidebar_state="expanded",
+ )
+ 
++import ui  # noqa: E402
+ 
+-ROOT = Path(__file__).resolve().parent
+-
+-MODEL_PATH = ROOT / "artifacts" / "model" / "xgb_reference.pkl"
+-FEATURE_PATH = ROOT / "artifacts" / "model" / "feature_columns.json"
+-
+-
+-# ============================================================
+-# LOAD ARTIFACTS
+-# ============================================================
+-
+-@st.cache_resource
+-def load_model():
+-
+-    with open(MODEL_PATH, "rb") as f:
+-        return pickle.load(f)
+-
++ui.setup_page()
+ 
+-@st.cache_data
+-def load_features():
+-
+-    with open(FEATURE_PATH, "r") as f:
+-        return json.load(f)
+-
+-
+-try:
+-
+-    model = load_model()
+-    feature_columns = load_features()
+-
+-except Exception as e:
+-
+-    st.error("FOODFLOW could not load the frozen model artifacts.")
+-    st.exception(e)
+-    st.stop()
+-
+-
+-# ============================================================
+-# SIDEBAR
+-# ============================================================
++pages = [
++    st.Page("pages/overview.py", title="Overview", icon="🏠", default=True),
++    st.Page("pages/forecast.py", title="Demand Forecasting", icon="📈"),
++    st.Page("pages/analysis.py", title="Demand & Error Analysis", icon="🔍"),
++    st.Page("pages/planner.py", title="Smart Preparation Planner", icon="🧑‍🍳"),
++]
++nav = st.navigation(pages)
+ 
+ with st.sidebar:
+-
+-    st.title("🍽️ FOODFLOW")
+-
+-    st.caption(
+-        "Food Demand Forecasting & "
+-        "Smart Preparation Optimization"
+-    )
+-
+-    st.divider()
+-
+-    st.success("Frozen model loaded")
+-
+-    st.metric(
+-        "Model features",
+-        len(feature_columns)
+-    )
+-
++    st.markdown("## 🍽️ FOODFLOW")
++    st.caption("Food demand forecasting & smart preparation planning")
+     st.divider()
+-
+-    st.caption(
+-        "FOODFLOW uses the frozen reference XGBoost "
+-        "model for inference. No retraining is performed "
+-        "inside the application."
+-    )
+-
+-
+-# ============================================================
+-# HEADER
+-# ============================================================
+-
+-st.title("🍽️ FOODFLOW")
+-
+-st.subheader(
+-    "Food Demand Forecasting & Smart Preparation Optimization"
+-)
+-
+-st.write(
+-    "Forecast food demand using historical sales patterns, "
+-    "calendar information, store characteristics and promotion status."
+-)
+-
+-st.divider()
+-
+-
+-# ============================================================
+-# MAIN OVERVIEW
+-# ============================================================
+-
+-st.header("Forecasting System")
+-
+-col1, col2, col3 = st.columns(3)
+-
+-with col1:
+-    st.metric(
+-        "Reference Model",
+-        "XGBoost"
+-    )
+-
+-with col2:
+-    st.metric(
+-        "Validation MAE",
+-        "57.55"
+-    )
+-
+-with col3:
+-    st.metric(
+-        "Validation RMSE",
+-        "198.03"
+-    )
+-
+-
+-st.divider()
+-
+-
+-# ============================================================
+-# HOW IT WORKS
+-# ============================================================
+-
+-st.header("How FOODFLOW Works")
+-
+-step1, step2, step3, step4 = st.columns(4)
+-
+-with step1:
+-
+-    st.subheader("1")
+-    st.write("User Inputs")
+-    st.caption(
+-        "Store, product family, date and promotion."
+-    )
+-
+-with step2:
+-
+-    st.subheader("2")
+-    st.write("Feature Generation")
+-    st.caption(
+-        "Historical lag, rolling and calendar features."
+-    )
+-
+-with step3:
+-
+-    st.subheader("3")
+-    st.write("Frozen XGBoost")
+-    st.caption(
+-        "Existing trained model performs inference."
+-    )
+-
+-with step4:
+-
+-    st.subheader("4")
+-    st.write("Demand Forecast")
+-    st.caption(
+-        "Predicted demand is returned to the user."
+-    )
+-
+-
+-st.divider()
+-
+-
+-# ============================================================
+-# RESEARCH CONTRIBUTION
+-# ============================================================
+-
+-st.header("Research Findings")
+-
+-st.write(
+-    "The research component investigates where demand forecasting "
+-    "errors are concentrated and evaluates a targeted tail-weighting "
+-    "strategy for high-demand observations."
+-)
+-
+-finding1, finding2, finding3 = st.columns(3)
+-
+-with finding1:
+-
+-    st.info(
+-        "Error concentration\n\n"
+-        "5% of observations account for approximately "
+-        "93.86% of total squared error."
+-    )
+-
+-with finding2:
+-
+-    st.info(
+-        "High-demand regime\n\n"
+-        "Forecast errors increase substantially as demand magnitude "
+-        "increases."
+-    )
+-
+-with finding3:
+-
+-    st.info(
+-        "Tail weighting\n\n"
+-        "Giving greater training importance to high-demand observations "
+-        "slightly improves overall and high-demand MAE."
+-    )
+-
+-
+-st.divider()
+-
+-
+-# ============================================================
+-# NAVIGATION
+-# ============================================================
+-
+-st.header("Explore FOODFLOW")
+-
+-st.write(
+-    "Use the pages in the sidebar to interact with the forecasting "
+-    "system and explore the research findings."
+-)
+-
+-st.page_link(
+-    "pages/1_Forecast.py",
+-    label="📈 Open Demand Forecast",
+-    icon="📈"
+-)
+-
+-st.caption(
+-    "Additional research-analysis pages can be added without "
+-    "changing the frozen model."
+-)
+\ No newline at end of file
++    if ui.safe_load():
++        _, source = ui.history()
++        st.caption("**Model:** frozen reference XGBoost (no retraining in the app)")
++        st.caption(f"**Forecast history:** {source}")
++        st.caption("**Forecast window:** 2017-08-16 onwards (day after the last observed date)")
++    else:
++        st.stop()
++
++nav.run()
+diff --git a/pages/1_Forecast.py b/pages/1_Forecast.py
+deleted file mode 100644
+index 676aa97..0000000
+--- a/pages/1_Forecast.py
++++ /dev/null
+@@ -1,316 +0,0 @@
+-from pathlib import Path
+-import json
+-import pickle
+-
+-import numpy as np
+-import pandas as pd
+-import streamlit as st
+-
+-
+-# ============================================================
+-# PATHS
+-# ============================================================
+-
+-ROOT = Path(__file__).resolve().parents[1]
+-
+-MODEL_PATH = ROOT / "artifacts" / "model" / "xgb_reference.pkl"
+-FEATURE_PATH = ROOT / "artifacts" / "model" / "feature_columns.json"
+-TRAIN_PATH = ROOT / "data" / "raw" / "train.csv"
+-
+-
+-# ============================================================
+-# LOAD MODEL
+-# ============================================================
+-
+-@st.cache_resource
+-def load_model():
+-
+-    with open(MODEL_PATH, "rb") as file:
+-        return pickle.load(file)
+-
+-
+-@st.cache_data
+-def load_feature_columns():
+-
+-    with open(FEATURE_PATH, "r") as file:
+-        return json.load(file)
+-
+-
+-@st.cache_data
+-def load_data():
+-
+-    return pd.read_csv(
+-        TRAIN_PATH,
+-        parse_dates=["date"]
+-    )
+-
+-
+-model = load_model()
+-feature_columns = load_feature_columns()
+-data = load_data()
+-
+-
+-# ============================================================
+-# FEATURE GENERATION
+-# ============================================================
+-
+-def create_forecast_features(
+-    historical_data,
+-    store_nbr,
+-    family,
+-    forecast_date,
+-    onpromotion
+-):
+-
+-    # Import the SAME feature-generation function
+-    # used during model training.
+-    import sys
+-
+-    src_models = ROOT / "src" / "models"
+-
+-    if str(src_models) not in sys.path:
+-        sys.path.insert(0, str(src_models))
+-
+-    from features import create_features
+-
+-    # Historical data
+-    history = historical_data[
+-        ["date", "store_nbr", "family", "sales", "onpromotion"]
+-    ].copy()
+-
+-    # Create the future observation.
+-    future_row = pd.DataFrame({
+-        "date": [pd.Timestamp(forecast_date)],
+-        "store_nbr": [store_nbr],
+-        "family": [family],
+-        "sales": [np.nan],
+-        "onpromotion": [int(onpromotion)],
+-    })
+-
+-    # Append future observation.
+-    combined = pd.concat(
+-        [history, future_row],
+-        ignore_index=True
+-    )
+-
+-    # Generate the exact original features.
+-    combined = create_features(combined)
+-
+-    # Retrieve the future row.
+-    future_features = combined[
+-        (combined["date"] == pd.Timestamp(forecast_date))
+-        & (combined["store_nbr"] == store_nbr)
+-        & (combined["family"] == family)
+-    ].copy()
+-
+-    if future_features.empty:
+-        raise ValueError(
+-            "Could not generate features for the selected forecast."
+-        )
+-
+-    # One-hot encode family exactly as training did.
+-    future_features = pd.get_dummies(
+-        future_features,
+-        columns=["family"],
+-        dtype=int
+-    )
+-
+-    # Ensure every model feature exists.
+-    for column in feature_columns:
+-
+-        if column not in future_features.columns:
+-            future_features[column] = 0
+-
+-    # Keep EXACT frozen-model feature order.
+-    X_future = future_features[feature_columns]
+-
+-    return X_future
+-
+-
+-# ============================================================
+-# PAGE
+-# ============================================================
+-
+-st.title("📈 Demand Forecast")
+-
+-st.write(
+-    "Enter the forecast conditions below. FOODFLOW automatically "
+-    "constructs the historical lag and rolling features required "
+-    "by the frozen XGBoost model."
+-)
+-
+-st.divider()
+-
+-
+-# ============================================================
+-# USER INPUTS
+-# ============================================================
+-
+-st.subheader("Forecast Inputs")
+-
+-col1, col2 = st.columns(2)
+-
+-with col1:
+-
+-    stores = sorted(
+-        data["store_nbr"].dropna().unique().tolist()
+-    )
+-
+-    store = st.selectbox(
+-        "Store",
+-        stores
+-    )
+-
+-    families = sorted(
+-        data["family"].dropna().unique().tolist()
+-    )
+-
+-    family = st.selectbox(
+-        "Product Family",
+-        families
+-    )
+-
+-
+-with col2:
+-
+-    min_date = data["date"].max() + pd.Timedelta(days=1)
+-
+-    forecast_date = st.date_input(
+-        "Forecast Date",
+-        value=min_date.date(),
+-        min_value=min_date.date()
+-    )
+-
+-    promotion = st.selectbox(
+-        "Promotion",
+-        ["No", "Yes"]
+-    )
+-
+-
+-onpromotion = 1 if promotion == "Yes" else 0
+-
+-
+-st.divider()
+-
+-
+-# ============================================================
+-# PREDICT
+-# ============================================================
+-
+-if st.button(
+-    "🔮 Predict Demand",
+-    type="primary",
+-    use_container_width=True
+-):
+-
+-    with st.spinner("Generating demand forecast..."):
+-
+-        try:
+-
+-            X_future = create_forecast_features(
+-                historical_data=data,
+-                store_nbr=store,
+-                family=family,
+-                forecast_date=forecast_date,
+-                onpromotion=onpromotion
+-            )
+-
+-            # Check for missing features.
+-            missing = X_future.isna().sum().sum()
+-
+-            if missing > 0:
+-
+-                st.error(
+-                    "The model input contains missing features. "
+-                    "The forecast cannot be generated safely."
+-                )
+-
+-                st.stop()
+-
+-            # ==================================================
+-            # FROZEN MODEL INFERENCE
+-            # ==================================================
+-
+-            prediction = model.predict(X_future)
+-
+-            prediction = max(
+-                0,
+-                float(prediction[0])
+-            )
+-
+-        except Exception as error:
+-
+-            st.error(
+-                "Unable to generate the forecast."
+-            )
+-
+-            st.exception(error)
+-
+-            st.stop()
+-
+-
+-    # ========================================================
+-    # RESULT
+-    # ========================================================
+-
+-    st.success("Forecast generated successfully.")
+-
+-    st.subheader("Predicted Demand")
+-
+-    result_col1, result_col2, result_col3 = st.columns(3)
+-
+-    with result_col1:
+-
+-        st.metric(
+-            "Predicted Units",
+-            f"{prediction:,.0f}"
+-        )
+-
+-    with result_col2:
+-
+-        st.metric(
+-            "Store",
+-            str(store)
+-        )
+-
+-    with result_col3:
+-
+-        st.metric(
+-            "Promotion",
+-            promotion
+-        )
+-
+-
+-    st.markdown(
+-        f"""
+-        ### Forecast Summary
+-
+-        FOODFLOW predicts approximately
+-
+-        # {prediction:,.0f} units
+-
+-        for **{family}** at **Store {store}**
+-        on **{pd.Timestamp(forecast_date).strftime("%d %B %Y")}**.
+-
+-        Promotion status: **{promotion}**
+-        """
+-    )
+-
+-
+-    # ========================================================
+-    # MODEL INPUT PREVIEW
+-    # ========================================================
+-
+-    with st.expander("View model input"):
+-
+-        st.caption(
+-            "These are the automatically generated features "
+-            "passed to the frozen XGBoost model."
+-        )
+-
+-        st.dataframe(
+-            X_future.T.rename(
+-                columns={X_future.index[0]: "value"}
+-            ),
+-            use_container_width=True
+-        )
+\ No newline at end of file
+diff --git a/pages/analysis.py b/pages/analysis.py
+new file mode 100644
+index 0000000..2b6d5f6
+--- /dev/null
++++ b/pages/analysis.py
+@@ -0,0 +1,227 @@
++import numpy as np
++import pandas as pd
++import plotly.express as px
++import plotly.graph_objects as go
++import streamlit as st
++
++import foodflow_core as core
++import ui
++
++st.title("🔍 Demand & Error Analysis")
++st.write(
++    "All charts use the saved research outputs of the frozen model on the validation period "
++    "(2017-07-19 to 2017-08-15). Nothing is retrained here."
++)
++
++v = ui.validation()
++m = ui.headline_metrics()
++families = sorted(v["family"].unique())
++
++tab1, tab2, tab3, tab4 = st.tabs([
++    "Demand trends", "Actual vs predicted", "Error concentration", "Regimes & tail-weighting",
++])
++
++# ============================================================ 1. Demand trends
++with tab1:
++    sel = st.multiselect("Product families (empty = all)", families,
++                         default=["BEVERAGES", "GROCERY I", "PRODUCE", "DAIRY", "BREAD/BAKERY"])
++    sub = v[v["family"].isin(sel)] if sel else v
++    daily = sub.groupby(["date", "family"] if sel else "date", as_index=False)["sales"].sum()
++    if sel:
++        fig = px.line(daily, x="date", y="sales", color="family", markers=True)
++    else:
++        fig = px.line(daily, x="date", y="sales", markers=True)
++        fig.update_traces(line_color=ui.ACTUAL)
++    fig.update_layout(title="Total daily demand across all stores", yaxis_title="Units",
++                      xaxis_title=None)
++    st.plotly_chart(ui.style_fig(fig, 400), width="stretch")
++    st.caption("Clear weekly cycle: weekends peak in almost every family.")
++
++    fam = (v.groupby("family")
++           .agg(avg_daily_demand=("sales", "mean"), mae=("absolute_error", "mean"))
++           .reset_index().sort_values("avg_daily_demand", ascending=False))
++    fam["mae_pct_of_demand"] = fam["mae"] / fam["avg_daily_demand"].replace(0, np.nan) * 100
++    c1, c2 = st.columns(2)
++    f1 = px.bar(fam.head(15), x="avg_daily_demand", y="family", orientation="h",
++                color_discrete_sequence=[ui.ACTUAL])
++    f1.update_layout(title="Average demand per store-day (top 15 families)",
++                     xaxis_title="Units", yaxis_title=None, hovermode="closest")
++    f1.update_yaxes(autorange="reversed")
++    c1.plotly_chart(ui.style_fig(f1, 450), width="stretch")
++    f2 = px.bar(fam.head(15), x="mae", y="family", orientation="h",
++                color_discrete_sequence=[ui.REFERENCE], hover_data={"mae_pct_of_demand": ":.1f"})
++    f2.update_layout(title="Model MAE for the same families", xaxis_title="MAE (units)",
++                     yaxis_title=None, hovermode="closest")
++    f2.update_yaxes(autorange="reversed")
++    c2.plotly_chart(ui.style_fig(f2, 450), width="stretch")
++    st.caption("High-volume families carry the largest absolute errors; hover to see MAE as a % of demand.")
++
++# ============================================================ 2. Actual vs predicted
++with tab2:
++    c1, c2 = st.columns(2)
++    fam_sel = c1.selectbox("Product family", ["All families"] + families)
++    store_sel = c2.selectbox("Store", ["All stores"] + sorted(v["store_nbr"].unique().tolist()))
++    sub = v
++    if fam_sel != "All families":
++        sub = sub[sub["family"] == fam_sel]
++    if store_sel != "All stores":
++        sub = sub[sub["store_nbr"] == store_sel]
++
++    k = st.columns(4)
++    ui.kpi(k[0], "Observations", f"{len(sub):,}")
++    ui.kpi(k[1], "MAE", f"{core.mae(sub['sales'], sub['predicted']):,.2f}")
++    ui.kpi(k[2], "RMSE", f"{core.rmse(sub['sales'], sub['predicted']):,.2f}")
++    bias = (sub["predicted"] - sub["sales"]).mean()
++    ui.kpi(k[3], "Mean bias", f"{bias:+,.2f}", "positive = over-prediction")
++    st.write("")
++
++    daily = sub.groupby("date", as_index=False)[["sales", "predicted"]].sum()
++    fig = go.Figure([
++        go.Scatter(x=daily["date"], y=daily["sales"], name="Actual", mode="lines+markers",
++                   line=dict(color=ui.ACTUAL, width=2)),
++        go.Scatter(x=daily["date"], y=daily["predicted"], name="Predicted (reference XGBoost)",
++                   mode="lines+markers", line=dict(color=ui.REFERENCE, width=2, dash="dot")),
++    ])
++    fig.update_layout(title="Daily total: actual vs predicted", yaxis_title="Units")
++    st.plotly_chart(ui.style_fig(fig, 380), width="stretch")
++
++    c3, c4 = st.columns(2)
++    sample = sub.sample(min(len(sub), 6000), random_state=0)
++    lim = max(sample["sales"].max(), sample["predicted"].max()) * 1.05 if len(sample) else 1
++    f3 = px.scatter(sample, x="sales", y="predicted", opacity=0.35,
++                    hover_data=["date", "store_nbr", "family"],
++                    color_discrete_sequence=[ui.REFERENCE])
++    f3.add_trace(go.Scatter(x=[0, lim], y=[0, lim], mode="lines", name="perfect forecast",
++                            line=dict(color="gray", dash="dash")))
++    f3.update_layout(title="Each point = one store-family-day", xaxis_title="Actual",
++                     yaxis_title="Predicted", hovermode="closest")
++    c3.plotly_chart(ui.style_fig(f3, 400), width="stretch")
++    if len(sub) > len(sample):
++        c3.caption(f"Random sample of {len(sample):,} of {len(sub):,} points for speed.")
++
++    err = (sub["sales"] - sub["predicted"])
++    clip = err.abs().quantile(0.99) if len(err) else 1
++    f4 = px.histogram(err.clip(-clip, clip), nbins=80, color_discrete_sequence=[ui.TAIL])
++    f4.update_layout(title="Prediction error distribution (actual − predicted)",
++                     xaxis_title="Error (units), clipped at the 99th percentile",
++                     yaxis_title="Count", showlegend=False, hovermode="closest")
++    c4.plotly_chart(ui.style_fig(f4, 400), width="stretch")
++
++    st.markdown("**Largest individual errors in this selection**")
++    st.dataframe(
++        sub.nlargest(10, "absolute_error")[["date", "store_nbr", "family", "sales", "predicted",
++                                            "absolute_error"]]
++        .assign(date=lambda d: d["date"].dt.strftime("%Y-%m-%d (%a)")),
++        hide_index=True, width="stretch",
++        column_config={c: st.column_config.NumberColumn(format="%.0f")
++                       for c in ["sales", "predicted", "absolute_error"]},
++    )
++
++# ============================================================ 3. Error concentration
++with tab3:
++    curve = core.cumulative_squared_error_share(v["sales"], v["predicted"])
++    marks = [1, 2, 5, 10, 20]
++    pts = pd.DataFrame({"obs_pct": marks, "share": [core.share_at(curve, p) for p in marks]})
++    plot_curve = curve.iloc[np.unique(np.r_[np.linspace(0, len(curve) - 1, 2000).astype(int)])]
++
++    fig = go.Figure()
++    fig.add_trace(go.Scatter(x=plot_curve["obs_pct"], y=plot_curve["error_share_pct"],
++                             mode="lines", line=dict(color=ui.REFERENCE, width=3),
++                             name="Cumulative share of squared error"))
++    fig.add_trace(go.Scatter(x=[0, 100], y=[0, 100], mode="lines", name="If errors were equal",
++                             line=dict(color="gray", dash="dash")))
++    fig.add_trace(go.Scatter(x=pts["obs_pct"], y=pts["share"], mode="markers+text",
++                             text=[f"top {p}% → {s:.2f}%" for p, s in zip(marks, pts["share"])],
++                             textposition="bottom right", marker=dict(size=10, color=ui.TAIL),
++                             name="Reference points"))
++    zoom = st.toggle("Zoom into the worst 25% of observations", value=True)
++    fig.update_xaxes(title="Observations sorted from largest to smallest squared error (%)",
++                     range=[0, 25] if zoom else [0, 100])
++    fig.update_yaxes(title="Share of total squared error (%)", range=[0, 102])
++    fig.update_layout(title="Cumulative squared-error contribution", hovermode="closest")
++    st.plotly_chart(ui.style_fig(fig, 460), width="stretch")
++
++    c1, c2 = st.columns([2, 3])
++    c1.dataframe(pts.rename(columns={"obs_pct": "Top % of observations",
++                                     "share": "Share of squared error (%)"}).round(2),
++                 hide_index=True, width="stretch")
++    top = v.nlargest(int(np.ceil(len(v) * 0.01)), "squared_error")
++    comp = top["family"].value_counts().head(6)
++    c1.caption(
++        f"The top 1% ({len(top)} rows) are dominated by: "
++        + ", ".join(f"{f} ({n})" for f, n in comp.items()) + "."
++    )
++    dg = ui.csv(str(core.RESULTS / "xgb_error_by_demand.csv"))
++    dg["group"] = ["Very low", "Low", "Medium", "High", "Very high"][: len(dg)]
++    dg["label"] = dg["group"] + "<br>" + dg["demand_group"]
++    f2 = go.Figure(go.Bar(x=dg["label"], y=dg["MAE"], marker_color=ui.REFERENCE,
++                          text=dg["MAE"].map(lambda x: f"{x:.2f}"), textposition="outside"))
++    f2.update_layout(title="MAE by demand magnitude (quintiles of actual sales)",
++                     yaxis_title="MAE (units)", hovermode="closest")
++    c2.plotly_chart(ui.style_fig(f2, 360), width="stretch")
++    st.info(
++        f"Squared-error metrics such as RMSE are driven by a small set of difficult, high-demand "
++        f"rows: the top 1% of observations explain {m['top1']:.2f}% of squared error, and the "
++        f"highest-demand quintile has roughly {dg['MAE'].iloc[-1] / dg['MAE'].iloc[0]:.0f}× the "
++        "MAE of the lowest. Average accuracy alone hides this."
++    )
++
++# ============================================================ 4. Regimes & tail-weighting
++with tab4:
++    rv = ui.csv(str(core.TAIL_DIR / "reference_vs_tail.csv"))
++    st.markdown(
++        "**Experiment.** Same data, split, features, hyperparameters and seed as the reference "
++        "model; only the training sample weights changed. Rows with sales above the training "
++        "80th percentile (298 units) got weight 2.0; all others 1.0."
++    )
++    show = rv[rv["metric"].isin(["MAE", "RMSE"])].copy()
++    show["label"] = show["regime"].str.capitalize() + " " + show["metric"]
++    fig = go.Figure([
++        go.Bar(name="Reference XGBoost", x=show["label"], y=show["reference"],
++               marker_color=ui.REFERENCE, text=show["reference"].map(lambda x: f"{x:.2f}"),
++               textposition="outside"),
++        go.Bar(name="Tail-weighted XGBoost", x=show["label"], y=show["tail_weighted"],
++               marker_color=ui.TAIL, text=show["tail_weighted"].map(lambda x: f"{x:.2f}"),
++               textposition="outside"),
++    ])
++    fig.update_layout(barmode="group", yaxis_title="Error (units, lower is better)",
++                      title="Reference vs tail-weighted model by demand regime",
++                      hovermode="closest")
++    st.plotly_chart(ui.style_fig(fig, 420), width="stretch")
++
++    table = rv.copy()
++    table["regime"] = table["regime"].str.capitalize()
++    table["better?"] = np.where(
++        table["metric"].isin(["MAE", "RMSE", "Underprediction_Rate"]) & (table["change"] < 0), "✅ yes",
++        np.where(table["metric"] == "Bias",
++                 np.where(table["tail_weighted"].abs() < table["reference"].abs(), "✅ yes", "❌ no"),
++                 "❌ no"))
++    st.dataframe(table, hide_index=True, width="stretch",
++                 column_config={c: st.column_config.NumberColumn(format="%.4f")
++                                for c in ["reference", "tail_weighted", "change"]})
++    st.success(
++        "Overall MAE −0.64, overall RMSE −0.56 and high-demand MAE −2.73 units: a small but "
++        "consistent gain where the error is concentrated."
++    )
++    st.warning(
++        "Trade-offs: normal-demand RMSE rose by 1.47, normal MAE was essentially unchanged "
++        "(+0.01), and high-demand over-prediction bias grew from +33.0 to +41.7 units. "
++        "Tail-weighting is therefore a targeted improvement, not a universally better model. "
++        "The app's forecasts use the frozen reference model."
++    )
++
++    fi = ui.csv(str(core.RESULTS / "xgb_feature_importance.csv")).head(12)
++    f5 = px.bar(fi, x="importance", y="feature", orientation="h",
++                color_discrete_sequence=[ui.REFERENCE])
++    f5.update_layout(title="Reference model: top 12 features (XGBoost importance)",
++                     yaxis_title=None, hovermode="closest")
++    f5.update_yaxes(autorange="reversed")
++    st.plotly_chart(ui.style_fig(f5, 380), width="stretch")
++
++with st.expander("Original research figures (reports/research_analysis/figures)"):
++    figs = sorted(core.FIGURES.glob("*.png"))
++    if not figs:
++        st.caption("No figure files found.")
++    cols = st.columns(2)
++    for i, p in enumerate(figs):
++        cols[i % 2].image(str(p), caption=p.stem.replace("_", " "), width="stretch")
+diff --git a/pages/forecast.py b/pages/forecast.py
+new file mode 100644
+index 0000000..b1ca9a7
+--- /dev/null
++++ b/pages/forecast.py
+@@ -0,0 +1,157 @@
++import pandas as pd
++import plotly.graph_objects as go
++import streamlit as st
++
++import foodflow_core as core
++import ui
++
++st.title("📈 Demand Forecasting")
++st.write(
++    "Pick a store, a product family, a forecast date and the promotion level. FOODFLOW builds "
++    "the same lag, rolling and calendar features used in training and runs the frozen "
++    "reference XGBoost model."
++)
++
++model, fcols = ui.model(), ui.feature_columns()
++hist, source = ui.history()
++
++# ------------------------------------------------------------ Inputs
++with st.container(border=True):
++    store, family = ui.series_picker("fc")
++    c3, c4 = st.columns(2)
++    first = core.LAST_OBSERVED_DATE + pd.Timedelta(days=1)
++    last = core.LAST_OBSERVED_DATE + pd.Timedelta(days=core.MAX_HORIZON_DAYS)
++    target = c3.date_input(
++        "Forecast date", value=first.date(), min_value=first.date(), max_value=last.date(),
++        help="Supported range: 2017-08-16 to 2017-08-31. The data ends on 2017-08-15, "
++             "so 16 Aug is a true next-day forecast; later days are forecast recursively.",
++    )
++    promo = c4.number_input(
++        "Items on promotion in this family", min_value=0, max_value=800, value=0, step=1,
++        help="In this dataset `onpromotion` is the NUMBER of products in the family that are "
++             "on promotion that day (median 0, 95th percentile 13, max 741).",
++    )
++
++horizon = (pd.Timestamp(target) - core.LAST_OBSERVED_DATE).days
++series = core.series_history(hist, store, family)
++
++try:
++    fc = core.forecast_series(model, fcols, series, store, family, horizon, promo)
++except ValueError as e:
++    st.error(f"Forecast not generated: {e}")
++    st.stop()
++
++pred = fc["prediction"].iloc[-1]
++direct = horizon == 1
++val = ui.series_validation(store, family)
++series_mae = core.mae(val["sales"], val["predicted"]) if len(val) else float("nan")
++recent7 = series["sales"].tail(7).mean()
++same_wd = series[series["date"] == pd.Timestamp(target) - pd.Timedelta(days=7 * ((horizon - 1) // 7 + 1))]
++
++# ------------------------------------------------------------ Result
++tag = "direct next-day forecast" if direct else f"recursive forecast, {horizon} days ahead"
++st.markdown(
++    f"""
++<div class="ff-hero">
++  <div>Predicted demand · <b>{family}</b> · Store {store} ·
++  {pd.Timestamp(target).strftime('%A %d %B %Y')} <span class="ff-tag">{tag}</span></div>
++  <div class="big">{pred:,.0f} units</div>
++  <div>Typical error for this store-family in validation: ± {series_mae:,.0f} units (MAE over 28 days)</div>
++</div>
++""",
++    unsafe_allow_html=True,
++)
++
++k = st.columns(4)
++ui.kpi(k[0], "Last 7 days average", f"{recent7:,.0f}", "actual units / day")
++ui.kpi(k[1], "Forecast vs 7-day average",
++       f"{(pred / recent7 - 1) * 100:+.1f}%" if recent7 > 0 else "n/a")
++if len(same_wd):
++    ui.kpi(k[2], "Same weekday, last observed week", f"{same_wd['sales'].iloc[0]:,.0f}",
++           same_wd["date"].iloc[0].strftime("%d %b %Y"))
++else:
++    ui.kpi(k[2], "Same weekday, last observed week", "n/a")
++ui.kpi(k[3], "Inputs from real data", f"{fc['real_lag_share'].iloc[-1] * 100:.0f}%",
++       "of the 7 lag / rolling features")
++
++if not direct:
++    st.warning(
++        f"**Limitation:** the data ends on 2017-08-15, so for {pd.Timestamp(target):%d %b} the "
++        "model's lag and rolling inputs partly use its own earlier predictions (recursive "
++        "forecasting). The model was validated on next-day forecasts only, so treat this as "
++        "less reliable than the 16 Aug forecast. The promotion value is applied to every "
++        "intermediate day."
++    )
++
++# ------------------------------------------------------------ Chart
++st.subheader("Recent demand and forecast")
++fig = go.Figure()
++fig.add_trace(go.Scatter(x=series["date"], y=series["sales"], name="Actual demand",
++                         mode="lines+markers", line=dict(color=ui.ACTUAL, width=2),
++                         marker=dict(size=4)))
++if len(val):
++    fig.add_trace(go.Scatter(x=val["date"], y=val["predicted"], name="Model on validation days",
++                             mode="lines", line=dict(color=ui.REFERENCE, width=1.5, dash="dot")))
++fig.add_trace(go.Scatter(x=[series["date"].iloc[-1], fc["date"].iloc[0]],
++                         y=[series["sales"].iloc[-1], fc["prediction"].iloc[0]],
++                         mode="lines", line=dict(color=ui.TAIL, width=1.5, dash="dot"),
++                         showlegend=False, hoverinfo="skip"))
++fig.add_trace(go.Scatter(x=fc["date"], y=fc["prediction"], name="Forecast (± validation MAE)",
++                         mode="lines+markers", line=dict(color=ui.TAIL, width=2.5),
++                         error_y=dict(type="constant", value=series_mae, thickness=1.2,
++                                      color="rgba(217,130,43,0.6)")))
++fig.add_trace(go.Scatter(x=[pd.Timestamp(target)], y=[pred], name="Selected date",
++                         mode="markers", marker=dict(color=ui.TAIL, size=14, symbol="star")))
++fig.add_vline(x=core.LAST_OBSERVED_DATE, line_dash="dash", line_color="gray")
++fig.add_annotation(x=core.LAST_OBSERVED_DATE, y=1, yref="paper", text="last observed day",
++                   showarrow=False, xanchor="right", font=dict(size=11, color="gray"))
++fig.update_layout(yaxis_title="Units sold per day")
++st.plotly_chart(ui.style_fig(fig, 420), width="stretch")
++st.caption(
++    f"History source: {source}. The dotted green line is what the same frozen model predicted "
++    "for these days during validation (saved research output), so you can see how closely it "
++    "tracks this particular series."
++)
++
++# ------------------------------------------------------------ Explanation
++st.subheader("Why this number?")
++X = core.feature_vector(series, store, family, promo, fcols).iloc[0]
++e1, e2 = st.columns([3, 2])
++with e1:
++    weekday = pd.Timestamp(target).day_name()
++    st.markdown(
++        f"""
++- The model's most important input is the **7-day rolling average** (about 60% of the
++  model's total feature importance). For this series it was **{X['rolling_mean_7']:,.0f}**
++  units/day going into 16 Aug.
++- It also looks at the same weekday one and two weeks earlier (**lag 7 = {X['lag_7']:,.0f}**,
++  **lag 14 = {X['lag_14']:,.0f}**), which captures the weekly shopping cycle — {weekday}s
++  {'are weekend days, often busier' if pd.Timestamp(target).dayofweek >= 5 else 'are weekdays'}.
++- Yesterday's sales (**lag 1 = {X['lag_1']:,.0f}**) and the 28-day average
++  (**{X['rolling_mean_28']:,.0f}**) anchor the level.
++- Calendar fields, the store number, the product family and the promotion count adjust the
++  estimate further.
++"""
++    )
++with e2:
++    sens = core.promotion_sensitivity(model, fcols, series, store, family)
++    fig2 = go.Figure(go.Bar(x=sens["onpromotion"].astype(str), y=sens["prediction"],
++                            marker_color=ui.REFERENCE,
++                            text=sens["prediction"].map(lambda x: f"{x:,.0f}"),
++                            textposition="outside"))
++    fig2.update_layout(title="16 Aug forecast vs promotion count",
++                       xaxis_title="Items on promotion", yaxis_title="Predicted units",
++                       hovermode="closest")
++    st.plotly_chart(ui.style_fig(fig2, 300), width="stretch")
++    st.caption("Everything else held fixed. Shows what the model learned, not a causal effect.")
++
++with st.expander("Forecast path and exact model input"):
++    t1, t2 = st.columns(2)
++    show = fc.assign(date=fc["date"].dt.strftime("%a %d %b"),
++                     real_lag_share=(fc["real_lag_share"] * 100).round(0).astype(int).astype(str) + "%")
++    t1.dataframe(show.rename(columns={"real_lag_share": "real inputs"}), hide_index=True,
++                 width="stretch",
++                 column_config={"prediction": st.column_config.NumberColumn(format="%.1f")})
++    t2.dataframe(X.rename("value").to_frame().loc[lambda d: ~d.index.str.startswith("family_")
++                 | (d["value"] == 1)], width="stretch")
++    t2.caption("Feature vector for the direct 16 Aug forecast (family one-hot columns that are 0 hidden).")
+diff --git a/pages/overview.py b/pages/overview.py
+new file mode 100644
+index 0000000..f7f610c
+--- /dev/null
++++ b/pages/overview.py
+@@ -0,0 +1,118 @@
++import pandas as pd
++import plotly.graph_objects as go
++import streamlit as st
++
++import ui
++
++m = ui.headline_metrics()
++v = ui.validation()
++base = m["baselines"]
++seasonal_mae = float(base.loc[base["Model"].str.startswith("Seasonal"), "MAE"].iloc[0])
++improvement = (seasonal_mae - m["xgb_mae"]) / seasonal_mae * 100
++
++st.title("🍽️ FOODFLOW")
++st.markdown("#### Food demand forecasting and smart preparation planning")
++
++st.markdown(
++    """
++**Problem.** Stores that sell food have to decide every day how much to stock or prepare.
++Too little means empty shelves and lost sales; too much means waste. Demand changes with the
++store, the product family, the day of the week, promotions and recent sales, so a fixed rule
++of thumb does not work well.
++
++**Objective.** Forecast daily demand for each store and product family from historical sales,
++compare it honestly against simple baselines, study *where* the model fails, and turn a
++forecast into an illustrative preparation quantity.
++"""
++)
++
++# ------------------------------------------------------------ KPIs
++st.subheader("Verified model performance")
++st.caption(
++    f"Computed live from the saved validation predictions ({m['n_val']:,} observations, "
++    "2017-07-19 to 2017-08-15). Lower is better."
++)
++c = st.columns(4)
++ui.kpi(c[0], "XGBoost MAE", f"{m['xgb_mae']:.2f}", "units per store-family-day")
++ui.kpi(c[1], "XGBoost RMSE", f"{m['xgb_rmse']:.2f}", "penalises large misses")
++ui.kpi(c[2], "Better than seasonal naive", f"{improvement:.1f}%",
++       f"MAE {seasonal_mae:.2f} → {m['xgb_mae']:.2f}")
++ui.kpi(c[3], "Error from top 1% of rows", f"{m['top1']:.2f}%",
++       "share of total squared error")
++
++st.write("")
++
++# ------------------------------------------------------------ Baselines vs XGB
++left, right = st.columns([3, 2])
++with left:
++    st.subheader("Baselines vs XGBoost")
++    comp = pd.concat([
++        base[["Model", "MAE", "RMSE", "RMSLE"]],
++        pd.DataFrame([{"Model": "Reference XGBoost", "MAE": m["xgb_mae"],
++                       "RMSE": m["xgb_rmse"], "RMSLE": m["xgb_rmsle"]}]),
++    ], ignore_index=True)
++    metric = st.radio("Metric", ["MAE", "RMSE"], horizontal=True, label_visibility="collapsed")
++    colors = [ui.BASELINE] * (len(comp) - 1) + [ui.REFERENCE]
++    fig = go.Figure(go.Bar(
++        x=comp[metric], y=comp["Model"], orientation="h", marker_color=colors,
++        text=comp[metric].map(lambda x: f"{x:.2f}"), textposition="outside",
++    ))
++    fig.update_layout(xaxis_title=f"Validation {metric} (lower is better)", hovermode="closest")
++    fig.update_yaxes(autorange="reversed")
++    st.plotly_chart(ui.style_fig(fig, 300), width="stretch")
++
++with right:
++    st.subheader("Full comparison")
++    st.dataframe(
++        comp.style.format({"MAE": "{:.2f}", "RMSE": "{:.2f}", "RMSLE": "{:.3f}"}),
++        hide_index=True, width="stretch",
++    )
++    st.caption(
++        "XGBoost clearly wins on MAE and RMSE. It does **not** win on RMSLE, which weights "
++        "relative errors on small/zero-demand series heavily. The model was optimised for "
++        "absolute error, so this is reported rather than hidden."
++    )
++
++# ------------------------------------------------------------ Key finding
++st.subheader("Key research finding")
++k1, k2 = st.columns(2)
++with k1:
++    st.info(
++        f"**Errors are extremely concentrated.** The {-(-m['n_val'] // 100):,} worst validation "
++        f"observations (top 1%) produce **{m['top1']:.2f}%** of all squared error, and the "
++        f"top 5% produce **{m['top5']:.2f}%**. These are mostly high-demand rows "
++        "(BEVERAGES, GROCERY I, CLEANING in large stores)."
++    )
++with k2:
++    st.info(
++        f"**Tail-weighting helps a little.** Giving high-demand training rows twice the weight "
++        f"lowered MAE from {m['xgb_mae']:.2f} to {m['tail_mae']:.2f} and RMSE from "
++        f"{m['xgb_rmse']:.2f} to {m['tail_rmse']:.2f}. The gain is modest and comes with "
++        "slightly worse normal-demand RMSE and more high-demand over-prediction bias."
++    )
++
++# ------------------------------------------------------------ Dataset
++st.subheader("Dataset")
++d = st.columns(5)
++ui.kpi(d[0], "Stores", f"{v['store_nbr'].nunique()}")
++ui.kpi(d[1], "Product families", f"{v['family'].nunique()}")
++ui.kpi(d[2], "Store-family series", f"{v.groupby(['store_nbr', 'family']).ngroups:,}")
++ui.kpi(d[3], "Training rows", "3,000,888", "2013-01-01 to 2017-08-15")
++ui.kpi(d[4], "Zero-sales rows", "31.30%", "demand is sparse and skewed")
++st.caption(
++    "Source: Kaggle *Store Sales – Time Series Forecasting* (Corporación Favorita, Ecuador). "
++    "Store/family/series counts are computed from the saved validation results; training-set "
++    "totals come from `docs/DATASET_PROFILE.md` (generated by `scripts/profile_dataset.py`), "
++    "because the raw 3M-row CSV is not shipped with the repository."
++)
++
++with st.expander("Methodology in brief"):
++    st.markdown(
++        """
++- **Temporal split:** train 2013-01-01 → 2017-07-18, validate 2017-07-19 → 2017-08-15 (28 days, 49,896 rows). No shuffling, so the model is always tested on the future.
++- **Features (51):** lags 1/7/14/28, rolling means 7/14/28 (shifted so they only use past days), calendar fields, promotion count, store number, one-hot product family.
++- **Model:** XGBoost, 500 trees, learning rate 0.05, max depth 8, subsample 0.8, colsample 0.8, min child weight 5. Predictions clipped at 0.
++- **Baselines:** naive (yesterday), seasonal naive (same weekday last week), 7-day moving average.
++- **Research analysis:** error by demand magnitude, cumulative squared-error concentration, family/store/date breakdowns, and a controlled tail-weighted retraining experiment (weight 2.0 above the training 80th percentile, 298 units).
++"""
++    )
+diff --git a/pages/pages/1_Forecast.py b/pages/pages/1_Forecast.py
+deleted file mode 100644
+index 676aa97..0000000
+--- a/pages/pages/1_Forecast.py
++++ /dev/null
+@@ -1,316 +0,0 @@
+-from pathlib import Path
+-import json
+-import pickle
+-
+-import numpy as np
+-import pandas as pd
+-import streamlit as st
+-
+-
+-# ============================================================
+-# PATHS
+-# ============================================================
+-
+-ROOT = Path(__file__).resolve().parents[1]
+-
+-MODEL_PATH = ROOT / "artifacts" / "model" / "xgb_reference.pkl"
+-FEATURE_PATH = ROOT / "artifacts" / "model" / "feature_columns.json"
+-TRAIN_PATH = ROOT / "data" / "raw" / "train.csv"
+-
+-
+-# ============================================================
+-# LOAD MODEL
+-# ============================================================
+-
+-@st.cache_resource
+-def load_model():
+-
+-    with open(MODEL_PATH, "rb") as file:
+-        return pickle.load(file)
+-
+-
+-@st.cache_data
+-def load_feature_columns():
+-
+-    with open(FEATURE_PATH, "r") as file:
+-        return json.load(file)
+-
+-
+-@st.cache_data
+-def load_data():
+-
+-    return pd.read_csv(
+-        TRAIN_PATH,
+-        parse_dates=["date"]
+-    )
+-
+-
+-model = load_model()
+-feature_columns = load_feature_columns()
+-data = load_data()
+-
+-
+-# ============================================================
+-# FEATURE GENERATION
+-# ============================================================
+-
+-def create_forecast_features(
+-    historical_data,
+-    store_nbr,
+-    family,
+-    forecast_date,
+-    onpromotion
+-):
+-
+-    # Import the SAME feature-generation function
+-    # used during model training.
+-    import sys
+-
+-    src_models = ROOT / "src" / "models"
+-
+-    if str(src_models) not in sys.path:
+-        sys.path.insert(0, str(src_models))
+-
+-    from features import create_features
+-
+-    # Historical data
+-    history = historical_data[
+-        ["date", "store_nbr", "family", "sales", "onpromotion"]
+-    ].copy()
+-
+-    # Create the future observation.
+-    future_row = pd.DataFrame({
+-        "date": [pd.Timestamp(forecast_date)],
+-        "store_nbr": [store_nbr],
+-        "family": [family],
+-        "sales": [np.nan],
+-        "onpromotion": [int(onpromotion)],
+-    })
+-
+-    # Append future observation.
+-    combined = pd.concat(
+-        [history, future_row],
+-        ignore_index=True
+-    )
+-
+-    # Generate the exact original features.
+-    combined = create_features(combined)
+-
+-    # Retrieve the future row.
+-    future_features = combined[
+-        (combined["date"] == pd.Timestamp(forecast_date))
+-        & (combined["store_nbr"] == store_nbr)
+-        & (combined["family"] == family)
+-    ].copy()
+-
+-    if future_features.empty:
+-        raise ValueError(
+-            "Could not generate features for the selected forecast."
+-        )
+-
+-    # One-hot encode family exactly as training did.
+-    future_features = pd.get_dummies(
+-        future_features,
+-        columns=["family"],
+-        dtype=int
+-    )
+-
+-    # Ensure every model feature exists.
+-    for column in feature_columns:
+-
+-        if column not in future_features.columns:
+-            future_features[column] = 0
+-
+-    # Keep EXACT frozen-model feature order.
+-    X_future = future_features[feature_columns]
+-
+-    return X_future
+-
+-
+-# ============================================================
+-# PAGE
+-# ============================================================
+-
+-st.title("📈 Demand Forecast")
+-
+-st.write(
+-    "Enter the forecast conditions below. FOODFLOW automatically "
+-    "constructs the historical lag and rolling features required "
+-    "by the frozen XGBoost model."
+-)
+-
+-st.divider()
+-
+-
+-# ============================================================
+-# USER INPUTS
+-# ============================================================
+-
+-st.subheader("Forecast Inputs")
+-
+-col1, col2 = st.columns(2)
+-
+-with col1:
+-
+-    stores = sorted(
+-        data["store_nbr"].dropna().unique().tolist()
+-    )
+-
+-    store = st.selectbox(
+-        "Store",
+-        stores
+-    )
+-
+-    families = sorted(
+-        data["family"].dropna().unique().tolist()
+-    )
+-
+-    family = st.selectbox(
+-        "Product Family",
+-        families
+-    )
+-
+-
+-with col2:
+-
+-    min_date = data["date"].max() + pd.Timedelta(days=1)
+-
+-    forecast_date = st.date_input(
+-        "Forecast Date",
+-        value=min_date.date(),
+-        min_value=min_date.date()
+-    )
+-
+-    promotion = st.selectbox(
+-        "Promotion",
+-        ["No", "Yes"]
+-    )
+-
+-
+-onpromotion = 1 if promotion == "Yes" else 0
+-
+-
+-st.divider()
+-
+-
+-# ============================================================
+-# PREDICT
+-# ============================================================
+-
+-if st.button(
+-    "🔮 Predict Demand",
+-    type="primary",
+-    use_container_width=True
+-):
+-
+-    with st.spinner("Generating demand forecast..."):
+-
+-        try:
+-
+-            X_future = create_forecast_features(
+-                historical_data=data,
+-                store_nbr=store,
+-                family=family,
+-                forecast_date=forecast_date,
+-                onpromotion=onpromotion
+-            )
+-
+-            # Check for missing features.
+-            missing = X_future.isna().sum().sum()
+-
+-            if missing > 0:
+-
+-                st.error(
+-                    "The model input contains missing features. "
+-                    "The forecast cannot be generated safely."
+-                )
+-
+-                st.stop()
+-
+-            # ==================================================
+-            # FROZEN MODEL INFERENCE
+-            # ==================================================
+-
+-            prediction = model.predict(X_future)
+-
+-            prediction = max(
+-                0,
+-                float(prediction[0])
+-            )
+-
+-        except Exception as error:
+-
+-            st.error(
+-                "Unable to generate the forecast."
+-            )
+-
+-            st.exception(error)
+-
+-            st.stop()
+-
+-
+-    # ========================================================
+-    # RESULT
+-    # ========================================================
+-
+-    st.success("Forecast generated successfully.")
+-
+-    st.subheader("Predicted Demand")
+-
+-    result_col1, result_col2, result_col3 = st.columns(3)
+-
+-    with result_col1:
+-
+-        st.metric(
+-            "Predicted Units",
+-            f"{prediction:,.0f}"
+-        )
+-
+-    with result_col2:
+-
+-        st.metric(
+-            "Store",
+-            str(store)
+-        )
+-
+-    with result_col3:
+-
+-        st.metric(
+-            "Promotion",
+-            promotion
+-        )
+-
+-
+-    st.markdown(
+-        f"""
+-        ### Forecast Summary
+-
+-        FOODFLOW predicts approximately
+-
+-        # {prediction:,.0f} units
+-
+-        for **{family}** at **Store {store}**
+-        on **{pd.Timestamp(forecast_date).strftime("%d %B %Y")}**.
+-
+-        Promotion status: **{promotion}**
+-        """
+-    )
+-
+-
+-    # ========================================================
+-    # MODEL INPUT PREVIEW
+-    # ========================================================
+-
+-    with st.expander("View model input"):
+-
+-        st.caption(
+-            "These are the automatically generated features "
+-            "passed to the frozen XGBoost model."
+-        )
+-
+-        st.dataframe(
+-            X_future.T.rename(
+-                columns={X_future.index[0]: "value"}
+-            ),
+-            use_container_width=True
+-        )
+\ No newline at end of file
+diff --git a/pages/planner.py b/pages/planner.py
+new file mode 100644
+index 0000000..190a25a
+--- /dev/null
++++ b/pages/planner.py
+@@ -0,0 +1,157 @@
++import numpy as np
++import pandas as pd
++import plotly.graph_objects as go
++import streamlit as st
++
++import foodflow_core as core
++import ui
++
++st.title("🧑‍🍳 Smart Preparation Planner")
++st.write(
++    "Turns a FOODFLOW forecast into an **illustrative** preparation quantity and compares "
++    "options with a simple shortage-versus-waste simulation."
++)
++st.caption(
++    "⚠️ Simulation only. Costs are your assumptions, and 'demand scenarios' are built from this "
++    "model's own past errors. No real inventory, savings or waste reduction is measured or claimed."
++)
++
++model, fcols = ui.model(), ui.feature_columns()
++hist, _ = ui.history()
++
++# ------------------------------------------------------------ Forecast input
++with st.container(border=True):
++    store, family = ui.series_picker("pl")
++    c3, c4 = st.columns(2)
++    first = core.LAST_OBSERVED_DATE + pd.Timedelta(days=1)
++    target = c3.date_input("Preparation date", value=first.date(), min_value=first.date(),
++                           max_value=(core.LAST_OBSERVED_DATE
++                                      + pd.Timedelta(days=core.MAX_HORIZON_DAYS)).date())
++    promo = c4.number_input("Items on promotion", min_value=0, max_value=800, value=0, step=1)
++
++horizon = (pd.Timestamp(target) - core.LAST_OBSERVED_DATE).days
++series = core.series_history(hist, store, family)
++try:
++    forecast = float(core.forecast_series(model, fcols, series, store, family, horizon,
++                                          promo)["prediction"].iloc[-1])
++except ValueError as e:
++    st.error(f"Forecast not generated: {e}")
++    st.stop()
++
++val = ui.series_validation(store, family)
++residuals = (val["sales"] - val["predicted"]).to_numpy()  # actual - predicted, 28 days
++
++if forecast < 1:
++    st.info(
++        f"The forecast for {family} at store {store} is {forecast:.2f} units — this series has "
++        "(almost) no recent sales, so there is nothing meaningful to plan. Try another store or "
++        "family, e.g. BREAD/BAKERY, DAIRY or PRODUCE."
++    )
++    st.stop()
++
++if horizon > 1:
++    st.warning("This date uses a recursive (multi-day) forecast, so real uncertainty is larger "
++               "than the simulated scenarios below suggest.")
++
++# ------------------------------------------------------------ Assumptions
++st.subheader("1 · Assumptions")
++a1, a2, a3 = st.columns(3)
++buffer = a1.slider("Safety buffer on top of the forecast (%)", 0, 50, 10, 1)
++cu = a2.number_input("Cost of one unit short (lost margin / goodwill)", 0.1, 1000.0, 3.0, 0.5,
++                     help="Illustrative value in any currency per unit of unmet demand.")
++co = a3.number_input("Cost of one unit wasted (unsold / spoiled)", 0.1, 1000.0, 1.0, 0.5,
++                     help="Illustrative value in the same currency per unit prepared but not sold.")
++
++prep = core.buffered_quantity(forecast, buffer)
++cr = core.critical_ratio(cu, co)
++opt = core.optimal_quantity(forecast, residuals, cu, co)
++res_buffer = core.simulate_outcomes(prep, forecast, residuals, cu, co)
++res_opt = core.simulate_outcomes(opt, forecast, residuals, cu, co)
++res_fc = core.simulate_outcomes(forecast, forecast, residuals, cu, co)
++
++# ------------------------------------------------------------ Recommendation
++st.subheader("2 · Preparation quantity")
++k = st.columns(4)
++ui.kpi(k[0], "Forecast demand", f"{forecast:,.0f}", f"{family}, store {store}, {pd.Timestamp(target):%d %b}")
++ui.kpi(k[1], f"With {buffer}% buffer", f"{np.ceil(prep):,.0f}",
++       f"simulated stock-out chance {res_buffer['stockout_prob'] * 100:.0f}%")
++ui.kpi(k[2], "Cost-balanced quantity", f"{np.ceil(opt):,.0f}",
++       f"critical ratio {cr:.2f} → {(opt / forecast - 1) * 100:+.1f}% vs forecast")
++ui.kpi(k[3], "Model error scenarios", f"{len(residuals)}",
++       f"validation days for this series (MAE {np.abs(residuals).mean():,.0f})")
++
++st.write("")
++with st.expander("How these numbers are calculated", expanded=False):
++    st.markdown(
++        r"""
++- **Buffered quantity** $= \text{forecast} \times (1 + \text{buffer}\%)$.
++- **Demand scenarios.** For this store-family the frozen model made 28 validation forecasts.
++  Each past error $r_i = \text{actual}_i - \text{predicted}_i$ becomes one scenario:
++  $D_i = \max(0,\ \text{forecast} + r_i)$.
++- **Cost of preparing $Q$** in a scenario
++  $= C_u \cdot \max(D_i - Q, 0) + C_o \cdot \max(Q - D_i, 0)$, averaged over all scenarios.
++- **Cost-balanced quantity** (newsvendor rule): the quantile of the $D_i$ at the
++  *critical ratio* $C_u / (C_u + C_o)$. If a shortage costs 3× more than waste, the critical
++  ratio is 0.75, so you prepare enough to cover demand in about 75% of scenarios.
++- **Limitations:** only 28 scenarios per series; costs are user assumptions; perishability,
++  batch sizes, existing stock and substitution between products are ignored.
++"""
++    )
++
++# ------------------------------------------------------------ What-if
++st.subheader("3 · What-if comparison")
++custom = st.number_input("Add your own preparation quantity", min_value=0.0,
++                         value=float(np.ceil(forecast)), step=1.0)
++options = {
++    "Forecast only": forecast,
++    f"Forecast +{buffer}% buffer": prep,
++    "Cost-balanced": opt,
++    "Forecast +25%": forecast * 1.25,
++    "Forecast −10%": forecast * 0.9,
++    "Your quantity": custom,
++}
++rows = []
++for name, q in options.items():
++    r = core.simulate_outcomes(q, forecast, residuals, cu, co)
++    rows.append({"Option": name, "Prepare": np.ceil(q),
++                 "Avg units short": r["expected_shortage"], "Avg units wasted": r["expected_waste"],
++                 "Stock-out chance": r["stockout_prob"] * 100, "Avg simulated cost": r["expected_cost"]})
++table = pd.DataFrame(rows)
++best = table["Avg simulated cost"].idxmin()
++
++c1, c2 = st.columns([3, 2])
++with c1:
++    fig = go.Figure([
++        go.Bar(name="Avg units short", x=table["Option"], y=table["Avg units short"],
++               marker_color=ui.TAIL),
++        go.Bar(name="Avg units wasted", x=table["Option"], y=table["Avg units wasted"],
++               marker_color=ui.BASELINE),
++    ])
++    fig.update_layout(barmode="group", yaxis_title="Units (simulated average)",
++                      title="Shortage vs waste for each option", hovermode="closest")
++    st.plotly_chart(ui.style_fig(fig, 380), width="stretch")
++with c2:
++    qs = np.linspace(max(0, forecast * 0.5), forecast * 1.6 + 1, 120)
++    costs = [core.simulate_outcomes(q, forecast, residuals, cu, co)["expected_cost"] for q in qs]
++    f2 = go.Figure(go.Scatter(x=qs, y=costs, mode="lines", line=dict(color=ui.REFERENCE, width=3),
++                              name="Avg simulated cost"))
++    f2.add_vline(x=opt, line_dash="dash", line_color=ui.TAIL,
++                 annotation_text="cost-balanced", annotation_position="top")
++    f2.add_vline(x=forecast, line_dash="dot", line_color="gray",
++                 annotation_text="forecast", annotation_position="bottom")
++    f2.update_layout(title="Average simulated cost vs quantity", xaxis_title="Units prepared",
++                     yaxis_title="Cost (assumed units)", showlegend=False, hovermode="x")
++    st.plotly_chart(ui.style_fig(f2, 380), width="stretch")
++
++st.dataframe(
++    table.style.format({"Prepare": "{:,.0f}", "Avg units short": "{:,.1f}",
++                        "Avg units wasted": "{:,.1f}", "Stock-out chance": "{:.0f}%",
++                        "Avg simulated cost": "{:,.1f}"})
++    .highlight_min(subset=["Avg simulated cost"], color="rgba(31,122,92,0.25)"),
++    hide_index=True, width="stretch",
++)
++st.caption(
++    f"Lowest simulated cost under your assumptions: **{table.loc[best, 'Option']}**. "
++    "Change the shortage and waste costs to see how the balance shifts. These are model-based "
++    "simulations, not measured savings."
++)
+diff --git a/requirements.txt b/requirements.txt
+index 324f16d..e49494e 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -7,4 +7,7 @@ xgboost
+ lightgbm
+ matplotlib
+ seaborn
+-jupyter
+\ No newline at end of file
++jupyter
++streamlit>=1.50
++plotly
++pytest
+diff --git a/src/foodflow_core.py b/src/foodflow_core.py
+new file mode 100644
+index 0000000..19689a0
+--- /dev/null
++++ b/src/foodflow_core.py
+@@ -0,0 +1,309 @@
++"""
++FOODFLOW core logic (no Streamlit dependency, so it can be unit-tested).
++
++Contents
++--------
++1. Paths and artifact loading
++2. History source for forecasting
++3. Forecasting with the frozen reference XGBoost model
++4. Metrics helpers
++5. Preparation-planning helpers
++
++Forecasting design
++------------------
++The frozen model was trained on lag / rolling features built by
++`src/models/features.py::create_features`. That function uses row-based
++`shift`, so the history passed to it must contain every consecutive day
++for a series. We therefore:
++
++* use the real observed sales up to 2017-08-15 (the last training date),
++* forecast 2017-08-16 directly (all features come from real data), and
++* forecast later days recursively, feeding each prediction back in as the
++  next day's "sales". Those later forecasts are clearly labelled as
++  recursive, because their lag features partly depend on predictions.
++
++The history source is `data/raw/train.csv` when it is available locally.
++Otherwise the app falls back to the actual sales stored in
++`reports/research_analysis/results/xgb_validation_errors.csv`, which covers
++every store-family series from 2017-07-19 to 2017-08-15 (28 consecutive
++days). 28 days is exactly what the longest feature (lag_28 / 28-day rolling
++mean) needs, so the next-day forecast is computed from the same inputs the
++full dataset would give.
++"""
++
++from __future__ import annotations
++
++import json
++import pickle
++import sys
++from pathlib import Path
++
++import numpy as np
++import pandas as pd
++
++# ============================================================
++# 1. PATHS
++# ============================================================
++
++ROOT = Path(__file__).resolve().parents[1]
++
++MODEL_PATH = ROOT / "artifacts" / "model" / "xgb_reference.pkl"
++FEATURE_PATH = ROOT / "artifacts" / "model" / "feature_columns.json"
++TRAIN_PATH = ROOT / "data" / "raw" / "train.csv"
++
++RESULTS = ROOT / "reports" / "research_analysis" / "results"
++FIGURES = ROOT / "reports" / "research_analysis" / "figures"
++TAIL_DIR = ROOT / "reports" / "experiments" / "experiment_tail_weighted_xgb"
++
++VALIDATION_ERRORS_PATH = RESULTS / "xgb_validation_errors.csv"
++BASELINE_PATH = ROOT / "reports" / "baseline_results.csv"
++
++LAST_OBSERVED_DATE = pd.Timestamp("2017-08-15")
++VAL_START = pd.Timestamp("2017-07-19")
++MAX_HORIZON_DAYS = 16  # same length as the Kaggle test window (Aug 16-31)
++HISTORY_DAYS_NEEDED = 28
++
++SRC_MODELS = ROOT / "src" / "models"
++if str(SRC_MODELS) not in sys.path:
++    sys.path.insert(0, str(SRC_MODELS))
++
++from features import create_features  # noqa: E402  (same function used in training)
++
++
++def load_model():
++    with open(MODEL_PATH, "rb") as f:
++        return pickle.load(f)
++
++
++def load_feature_columns() -> list[str]:
++    with open(FEATURE_PATH, "r") as f:
++        return json.load(f)
++
++
++def load_validation_errors() -> pd.DataFrame:
++    """Per-observation validation results of the reference model."""
++    return pd.read_csv(VALIDATION_ERRORS_PATH, parse_dates=["date"])
++
++
++def load_tail_predictions() -> pd.DataFrame:
++    """Tail-weighted model predictions (same row order as validation errors)."""
++    return pd.read_csv(TAIL_DIR / "validation_predictions.csv")
++
++
++# ============================================================
++# 2. HISTORY SOURCE
++# ============================================================
++
++def load_history() -> tuple[pd.DataFrame, str]:
++    """
++    Return (history, source_label) with columns
++    date, store_nbr, family, sales, onpromotion (onpromotion may be NaN).
++    """
++    if TRAIN_PATH.exists():
++        df = pd.read_csv(
++            TRAIN_PATH,
++            usecols=["date", "store_nbr", "family", "sales", "onpromotion"],
++            parse_dates=["date"],
++        )
++        # Keep a recent window only: enough for features + a readable chart.
++        df = df[df["date"] >= LAST_OBSERVED_DATE - pd.Timedelta(days=89)]
++        return df.reset_index(drop=True), "data/raw/train.csv (last 90 days)"
++
++    v = load_validation_errors()
++    hist = v[["date", "store_nbr", "family", "sales"]].copy()
++    hist["onpromotion"] = np.nan  # not stored in the validation artifact
++    return hist, "validation actuals (2017-07-19 to 2017-08-15)"
++
++
++def series_history(history: pd.DataFrame, store_nbr: int, family: str) -> pd.DataFrame:
++    s = history[(history["store_nbr"] == store_nbr) & (history["family"] == family)]
++    return s.sort_values("date").reset_index(drop=True)
++
++
++# ============================================================
++# 3. FORECASTING
++# ============================================================
++
++def _feature_row(series: pd.DataFrame, target_date, store_nbr, family, onpromotion,
++                 feature_columns):
++    """Build the single model-input row for `target_date` using create_features."""
++    future = pd.DataFrame({
++        "date": [pd.Timestamp(target_date)],
++        "store_nbr": [store_nbr],
++        "family": [family],
++        "sales": [np.nan],
++        "onpromotion": [float(onpromotion)],
++    })
++    base = series[["date", "store_nbr", "family", "sales", "onpromotion"]]
++    combined = pd.concat([base, future], ignore_index=True)
++    feats = create_features(combined)
++    row = feats[feats["date"] == pd.Timestamp(target_date)].copy()
++
++    # One-hot family exactly as in training (get_dummies on 'family').
++    for col in feature_columns:
++        if col.startswith("family_"):
++            row[col] = int(col == f"family_{family}")
++    missing = [c for c in feature_columns if c not in row.columns]
++    if missing:
++        raise ValueError(f"Missing model features: {missing}")
++    return row[feature_columns].astype(float)
++
++
++def check_series_history(series: pd.DataFrame) -> None:
++    """Raise ValueError if the history cannot support valid lag features."""
++    if series.empty:
++        raise ValueError("No history found for this store and product family.")
++    if series["date"].max() != LAST_OBSERVED_DATE:
++        raise ValueError("History does not end on the last observed date (2017-08-15).")
++    tail = series.tail(HISTORY_DAYS_NEEDED)
++    expected = pd.date_range(end=LAST_OBSERVED_DATE, periods=HISTORY_DAYS_NEEDED)
++    if len(tail) < HISTORY_DAYS_NEEDED or [pd.Timestamp(d) for d in tail["date"]] != list(expected):
++        raise ValueError(
++            "The last 28 days of history are incomplete, so lag features would be "
++            "misaligned. Forecast not generated."
++        )
++
++
++def forecast_series(model, feature_columns, series: pd.DataFrame, store_nbr: int,
++                    family: str, horizon_days: int, onpromotion: float) -> pd.DataFrame:
++    """
++    Forecast day 1..horizon_days after 2017-08-15.
++
++    Day 1 is a direct one-step forecast (every feature from real data).
++    Days 2+ are recursive: the previous predictions are used as lag values.
++    `onpromotion` is applied to every forecast day.
++    """
++    if not 1 <= horizon_days <= MAX_HORIZON_DAYS:
++        raise ValueError(f"Horizon must be between 1 and {MAX_HORIZON_DAYS} days.")
++    if onpromotion < 0:
++        raise ValueError("Promotion count cannot be negative.")
++    check_series_history(series)
++
++    work = series[["date", "store_nbr", "family", "sales", "onpromotion"]].copy()
++    work = work.tail(60)  # plenty for 28-day features; keeps it fast
++    rows = []
++    for step in range(1, horizon_days + 1):
++        target = LAST_OBSERVED_DATE + pd.Timedelta(days=step)
++        X = _feature_row(work, target, store_nbr, family, onpromotion, feature_columns)
++        if X.isna().any().any():
++            raise ValueError(f"Model input for {target.date()} contains missing values.")
++        pred = max(0.0, float(model.predict(X)[0]))  # training also clipped at 0
++        rows.append({
++            "date": target,
++            "step": step,
++            "prediction": pred,
++            "method": "direct (real history)" if step == 1 else "recursive",
++            "real_lag_share": _real_lag_share(step),
++        })
++        work = pd.concat([work, pd.DataFrame({
++            "date": [target], "store_nbr": [store_nbr], "family": [family],
++            "sales": [pred], "onpromotion": [float(onpromotion)],
++        })], ignore_index=True)
++    return pd.DataFrame(rows)
++
++
++def _real_lag_share(step: int) -> float:
++    """Share of the 7 lag/rolling inputs that use only real (not predicted) sales."""
++    real = 0
++    for lag in (1, 7, 14, 28):
++        real += lag >= step
++    for window in (7, 14, 28):
++        real += step == 1  # any rolling window after day 1 includes a prediction
++    return real / 7
++
++
++def feature_vector(series, store_nbr, family, onpromotion, feature_columns):
++    """Model input for the direct next-day forecast (for display)."""
++    check_series_history(series)
++    target = LAST_OBSERVED_DATE + pd.Timedelta(days=1)
++    return _feature_row(series.tail(60), target, store_nbr, family, onpromotion,
++                        feature_columns)
++
++
++def promotion_sensitivity(model, feature_columns, series, store_nbr, family,
++                          promo_values=(0, 1, 5, 10, 25, 50)) -> pd.DataFrame:
++    """Next-day prediction for several promotion counts (everything else fixed)."""
++    X0 = feature_vector(series, store_nbr, family, 0, feature_columns)
++    out = []
++    for p in promo_values:
++        X = X0.copy()
++        X["onpromotion"] = float(p)
++        out.append({"onpromotion": p, "prediction": max(0.0, float(model.predict(X)[0]))})
++    return pd.DataFrame(out)
++
++
++# ============================================================
++# 4. METRICS
++# ============================================================
++
++def mae(y, p):
++    return float(np.mean(np.abs(np.asarray(y) - np.asarray(p))))
++
++
++def rmse(y, p):
++    return float(np.sqrt(np.mean((np.asarray(y) - np.asarray(p)) ** 2)))
++
++
++def rmsle(y, p):
++    y = np.maximum(np.asarray(y, dtype=float), 0)
++    p = np.maximum(np.asarray(p, dtype=float), 0)
++    return float(np.sqrt(np.mean((np.log1p(p) - np.log1p(y)) ** 2)))
++
++
++def cumulative_squared_error_share(actual, predicted) -> pd.DataFrame:
++    """Curve of 'top x% of observations' -> share of total squared error."""
++    se = np.sort((np.asarray(actual) - np.asarray(predicted)) ** 2)[::-1]
++    share = np.cumsum(se) / se.sum()
++    n = len(se)
++    return pd.DataFrame({
++        "obs_pct": np.arange(1, n + 1) / n * 100,
++        "error_share_pct": share * 100,
++    })
++
++
++def share_at(curve: pd.DataFrame, pct: float) -> float:
++    n = len(curve)
++    idx = int(np.ceil(pct / 100 * n)) - 1
++    return float(curve["error_share_pct"].iloc[idx])
++
++
++# ============================================================
++# 5. PREPARATION PLANNING  (illustrative simulation)
++# ============================================================
++
++def buffered_quantity(forecast: float, buffer_pct: float) -> float:
++    """Preparation quantity = forecast x (1 + buffer%)."""
++    return max(0.0, forecast * (1 + buffer_pct / 100))
++
++
++def critical_ratio(shortage_cost: float, waste_cost: float) -> float:
++    """Newsvendor critical ratio Cu / (Cu + Co)."""
++    if shortage_cost <= 0 or waste_cost <= 0:
++        raise ValueError("Costs must be positive.")
++    return shortage_cost / (shortage_cost + waste_cost)
++
++
++def simulate_outcomes(quantity: float, forecast: float, residuals,
++                      shortage_cost: float, waste_cost: float) -> dict:
++    """
++    Simulate demand as forecast + historical residual (actual - predicted),
++    floored at 0, and evaluate a preparation quantity against it.
++    """
++    residuals = np.asarray(residuals, dtype=float)
++    demand = np.maximum(forecast + residuals, 0)
++    short = np.maximum(demand - quantity, 0)
++    waste = np.maximum(quantity - demand, 0)
++    return {
++        "quantity": quantity,
++        "expected_shortage": float(short.mean()),
++        "expected_waste": float(waste.mean()),
++        "stockout_prob": float((short > 0).mean()),
++        "expected_cost": float(shortage_cost * short.mean() + waste_cost * waste.mean()),
++    }
++
++
++def optimal_quantity(forecast: float, residuals, shortage_cost: float,
++                     waste_cost: float) -> float:
++    """Newsvendor solution: quantile of simulated demand at the critical ratio."""
++    demand = np.maximum(forecast + np.asarray(residuals, dtype=float), 0)
++    return float(np.quantile(demand, critical_ratio(shortage_cost, waste_cost)))
+diff --git a/src/ui.py b/src/ui.py
+new file mode 100644
+index 0000000..92f970e
+--- /dev/null
++++ b/src/ui.py
+@@ -0,0 +1,159 @@
++"""Shared Streamlit helpers for FOODFLOW: cached loaders, styling, KPI cards."""
++
++from __future__ import annotations
++
++import pandas as pd
++import streamlit as st
++
++import foodflow_core as core
++
++# Colours used consistently across every chart.
++ACTUAL = "#5b6770"      # observed demand
++REFERENCE = "#1f7a5c"   # reference XGBoost
++TAIL = "#d9822b"        # tail-weighted XGBoost / forecasts
++BASELINE = "#b8c2cc"
++PLOT_TEMPLATE = "simple_white"
++
++
++# ------------------------------------------------------------
++# Cached loaders (loaded once per server process)
++# ------------------------------------------------------------
++
++@st.cache_resource(show_spinner="Loading frozen XGBoost model...")
++def model():
++    return core.load_model()
++
++
++@st.cache_data
++def feature_columns():
++    return core.load_feature_columns()
++
++
++@st.cache_data(show_spinner="Loading demand history...")
++def history():
++    return core.load_history()
++
++
++@st.cache_data(show_spinner="Loading validation results...")
++def validation():
++    v = core.load_validation_errors()
++    t = core.load_tail_predictions()
++    v["tail_predicted"] = t["predicted"].values
++    v["demand_regime"] = t["demand_regime"].values
++    return v
++
++
++@st.cache_data
++def csv(path_str: str) -> pd.DataFrame:
++    return pd.read_csv(path_str)
++
++
++@st.cache_data
++def headline_metrics() -> dict:
++    v = validation()
++    base = csv(str(core.BASELINE_PATH))
++    curve = core.cumulative_squared_error_share(v["sales"], v["predicted"])
++    return {
++        "xgb_mae": core.mae(v["sales"], v["predicted"]),
++        "xgb_rmse": core.rmse(v["sales"], v["predicted"]),
++        "xgb_rmsle": core.rmsle(v["sales"], v["predicted"]),
++        "tail_mae": core.mae(v["sales"], v["tail_predicted"]),
++        "tail_rmse": core.rmse(v["sales"], v["tail_predicted"]),
++        "n_val": len(v),
++        "baselines": base,
++        "top1": core.share_at(curve, 1),
++        "top5": core.share_at(curve, 5),
++    }
++
++
++@st.cache_data
++def series_validation(store_nbr: int, family: str) -> pd.DataFrame:
++    v = validation()
++    return v[(v["store_nbr"] == store_nbr) & (v["family"] == family)].sort_values("date")
++
++
++# ------------------------------------------------------------
++# Presentation
++# ------------------------------------------------------------
++
++CSS = """
++<style>
++.block-container {padding-top: 2rem; padding-bottom: 3rem; max-width: 1250px;}
++.ff-card {
++  border: 1px solid rgba(128,128,128,0.25); border-radius: 12px;
++  padding: 14px 18px; background: rgba(31,122,92,0.05); min-height: 112px;
++}
++.ff-card .label {font-size: 0.82rem; opacity: 0.75; margin-bottom: 2px;}
++.ff-card .value {font-size: 1.65rem; font-weight: 700; line-height: 1.2;}
++.ff-card .note {font-size: 0.78rem; opacity: 0.7; margin-top: 4px;}
++.ff-hero {
++  border-radius: 14px; padding: 22px 26px; margin: 6px 0 14px 0;
++  background: linear-gradient(135deg, rgba(31,122,92,0.12), rgba(217,130,43,0.10));
++  border: 1px solid rgba(128,128,128,0.2);
++}
++.ff-hero .big {font-size: 2.6rem; font-weight: 800; line-height: 1.1;}
++.ff-tag {display:inline-block; font-size:0.75rem; padding:2px 8px; border-radius:999px;
++  background: rgba(217,130,43,0.18); margin-left: 6px; vertical-align: middle;}
++</style>
++"""
++
++
++def setup_page():
++    st.markdown(CSS, unsafe_allow_html=True)
++
++
++def kpi(col, label: str, value: str, note: str = ""):
++    col.markdown(
++        f'<div class="ff-card"><div class="label">{label}</div>'
++        f'<div class="value">{value}</div>'
++        f'<div class="note">{note}</div></div>',
++        unsafe_allow_html=True,
++    )
++
++
++def style_fig(fig, height: int = 380):
++    fig.update_layout(
++        template=PLOT_TEMPLATE,
++        height=height,
++        margin=dict(l=10, r=10, t=40, b=10),
++        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
++        hovermode="x unified" if fig.layout.hovermode is None else fig.layout.hovermode,
++    )
++    if fig.layout.title.text:  # keep the title above the legend instead of on top of it
++        fig.update_layout(margin=dict(t=85),
++                          title=dict(y=0.98, yanchor="top", x=0, xanchor="left",
++                                     font=dict(size=15)))
++    return fig
++
++
++def safe_load() -> bool:
++    """Load model + history once; show a clear error instead of a traceback."""
++    try:
++        model()
++        feature_columns()
++        history()
++        validation()
++        return True
++    except FileNotFoundError as e:
++        st.error(f"A required project file is missing: `{e.filename}`")
++        return False
++    except Exception as e:  # pragma: no cover - defensive UI path
++        st.error("FOODFLOW could not load its model or research artifacts.")
++        st.exception(e)
++        return False
++
++
++def series_picker(key_prefix: str, default_store: int = 44,
++                  default_family: str = "BEVERAGES"):
++    """Store + family selectors shared by Forecast and Planner pages."""
++    hist, _ = history()
++    stores = sorted(hist["store_nbr"].unique().tolist())
++    families = sorted(hist["family"].unique().tolist())
++    if f"{key_prefix}_store" not in st.session_state:
++        st.session_state[f"{key_prefix}_store"] = st.session_state.get("sel_store", default_store)
++        st.session_state[f"{key_prefix}_family"] = st.session_state.get("sel_family", default_family)
++    c1, c2 = st.columns(2)
++    store = c1.selectbox("Store", stores, key=f"{key_prefix}_store")
++    family = c2.selectbox("Product family", families, key=f"{key_prefix}_family")
++    st.session_state["sel_store"], st.session_state["sel_family"] = store, family
++    return int(store), family
+diff --git a/tests/test_app_smoke.py b/tests/test_app_smoke.py
+new file mode 100644
+index 0000000..f98bdbe
+--- /dev/null
++++ b/tests/test_app_smoke.py
+@@ -0,0 +1,18 @@
++"""Smoke test: every dashboard page renders without an exception (headless)."""
++
++from pathlib import Path
++
++import pytest
++from streamlit.testing.v1 import AppTest
++
++APP = str(Path(__file__).resolve().parents[1] / "app.py")
++
++
++@pytest.mark.parametrize("page", [None, "forecast", "analysis", "planner"])
++def test_page_renders(page):
++    at = AppTest.from_file(APP, default_timeout=180)
++    at.run()
++    if page:
++        at.switch_page(f"pages/{page}.py").run()
++    assert not at.exception, [e.value for e in at.exception]
++    assert not at.error, [e.value for e in at.error]
+diff --git a/tests/test_foodflow.py b/tests/test_foodflow.py
+new file mode 100644
+index 0000000..89733cd
+--- /dev/null
++++ b/tests/test_foodflow.py
+@@ -0,0 +1,138 @@
++"""
++Targeted tests for the FOODFLOW app logic.
++
++Run:  python -m pytest tests -q
++"""
++
++import sys
++from pathlib import Path
++
++import numpy as np
++import pandas as pd
++import pytest
++
++ROOT = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(ROOT / "src"))
++
++import foodflow_core as core  # noqa: E402
++
++
++@pytest.fixture(scope="module")
++def model():
++    return core.load_model()
++
++
++@pytest.fixture(scope="module")
++def fcols():
++    return core.load_feature_columns()
++
++
++@pytest.fixture(scope="module")
++def history():
++    return core.load_history()[0]
++
++
++@pytest.fixture(scope="module")
++def validation():
++    return core.load_validation_errors()
++
++
++# ---------------------------------------------------------------- artifacts
++
++def test_feature_schema_matches_model(model, fcols):
++    assert fcols == list(model.get_booster().feature_names)
++    assert len(fcols) == 51
++
++
++def test_reported_metrics_reproduce(validation):
++    assert core.mae(validation["sales"], validation["predicted"]) == pytest.approx(57.5538, abs=1e-3)
++    assert core.rmse(validation["sales"], validation["predicted"]) == pytest.approx(198.0338, abs=1e-3)
++    curve = core.cumulative_squared_error_share(validation["sales"], validation["predicted"])
++    assert core.share_at(curve, 1) == pytest.approx(69.04, abs=0.01)
++    assert core.share_at(curve, 5) == pytest.approx(93.86, abs=0.01)
++
++
++def test_tail_weighted_metrics_reproduce(validation):
++    tail = core.load_tail_predictions()
++    assert np.array_equal(tail["actual"].values, validation["sales"].values)  # same row order
++    assert core.mae(tail["actual"], tail["predicted"]) == pytest.approx(56.9090, abs=1e-3)
++
++
++def test_seasonal_naive_baseline():
++    base = pd.read_csv(core.BASELINE_PATH)
++    seasonal = base.loc[base["Model"].str.startswith("Seasonal"), "MAE"].iloc[0]
++    assert seasonal == pytest.approx(86.93, abs=0.01)
++
++
++# ---------------------------------------------------------------- forecasting
++
++def test_next_day_features_use_real_history(history, fcols):
++    s = core.series_history(history, 44, "BEVERAGES")
++    X = core.feature_vector(s, 44, "BEVERAGES", 3, fcols).iloc[0]
++    sales = s.set_index("date")["sales"]
++    d = core.LAST_OBSERVED_DATE
++    assert X["lag_1"] == sales[d]
++    assert X["lag_7"] == sales[d - pd.Timedelta(days=6)]
++    assert X["lag_28"] == sales[d - pd.Timedelta(days=27)]
++    assert X["rolling_mean_7"] == pytest.approx(sales.tail(7).mean())
++    assert X["rolling_mean_28"] == pytest.approx(sales.tail(28).mean())
++    assert X["day_of_week"] == 2  # 2017-08-16 was a Wednesday
++    assert X["onpromotion"] == 3 and X["store_nbr"] == 44
++    fam = [c for c in fcols if c.startswith("family_")]
++    assert X[fam].sum() == 1 and X["family_BEVERAGES"] == 1
++
++
++def test_recursive_forecast_feeds_back_predictions(model, fcols, history):
++    s = core.series_history(history, 1, "BREAD/BAKERY")
++    fc = core.forecast_series(model, fcols, s, 1, "BREAD/BAKERY", 3, 0)
++    assert list(fc["method"]) == ["direct (real history)", "recursive", "recursive"]
++    assert (fc["prediction"] >= 0).all() and np.isfinite(fc["prediction"]).all()
++    # Day-2 lag_1 must be the day-1 prediction, not a real or stale value.
++    work = pd.concat([s, pd.DataFrame({"date": [fc["date"][0]], "store_nbr": [1],
++                                       "family": ["BREAD/BAKERY"],
++                                       "sales": [fc["prediction"][0]], "onpromotion": [0]})])
++    X2 = core._feature_row(work, fc["date"][1], 1, "BREAD/BAKERY", 0, fcols)
++    assert X2["lag_1"].iloc[0] == pytest.approx(fc["prediction"][0])
++    assert model.predict(X2)[0] == pytest.approx(fc["prediction"][1], rel=1e-5)
++
++
++def test_invalid_inputs_are_rejected(model, fcols, history):
++    s = core.series_history(history, 1, "DAIRY")
++    with pytest.raises(ValueError):
++        core.forecast_series(model, fcols, s, 1, "DAIRY", 0, 0)
++    with pytest.raises(ValueError):
++        core.forecast_series(model, fcols, s, 1, "DAIRY", core.MAX_HORIZON_DAYS + 1, 0)
++    with pytest.raises(ValueError):
++        core.forecast_series(model, fcols, s, 1, "DAIRY", 1, -1)
++    with pytest.raises(ValueError):  # gap in history -> would misalign lags
++        core.forecast_series(model, fcols, s.drop(index=s.index[-5]), 1, "DAIRY", 1, 0)
++
++
++def test_matches_saved_validation_predictions_when_raw_data_present(model, fcols):
++    """Only runs if data/raw/train.csv exists locally (it is not in the repo)."""
++    if not core.TRAIN_PATH.exists():
++        pytest.skip("data/raw/train.csv not available")
++    raw = pd.read_csv(core.TRAIN_PATH, parse_dates=["date"])
++    val = core.load_validation_errors()
++    target = pd.Timestamp("2017-08-15")
++    for store, fam in [(44, "BEVERAGES"), (1, "DAIRY"), (3, "GROCERY I")]:
++        s = raw[(raw.store_nbr == store) & (raw.family == fam) & (raw.date < target)]
++        promo = raw[(raw.store_nbr == store) & (raw.family == fam) & (raw.date == target)]["onpromotion"].iloc[0]
++        X = core._feature_row(s.tail(60), target, store, fam, promo, fcols)
++        pred = max(0.0, float(model.predict(X)[0]))
++        saved = val[(val.store_nbr == store) & (val.family == fam) & (val.date == target)]["predicted"].iloc[0]
++        assert pred == pytest.approx(saved, rel=1e-4, abs=1e-3)
++
++
++# ---------------------------------------------------------------- planner
++
++def test_planner_formulas():
++    assert core.buffered_quantity(100, 10) == pytest.approx(110)
++    assert core.critical_ratio(3, 1) == pytest.approx(0.75)
++    r = core.simulate_outcomes(100, 100, [-20, 0, 20], shortage_cost=3, waste_cost=1)
++    assert r["expected_shortage"] == pytest.approx(20 / 3)
++    assert r["expected_waste"] == pytest.approx(20 / 3)
++    assert r["expected_cost"] == pytest.approx(3 * 20 / 3 + 1 * 20 / 3)
++    # Higher shortage cost should never lower the cost-balanced quantity.
++    res = np.random.default_rng(0).normal(0, 30, 200)
++    assert core.optimal_quantity(100, res, 5, 1) >= core.optimal_quantity(100, res, 1, 5)
+-- 
+2.43.0
+
